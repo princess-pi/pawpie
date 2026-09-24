@@ -149,16 +149,17 @@ actually used (`usage.searches`, `usage.fetches`, `usage.judgeCalls`) — it nev
   a quoted argument with a space in it will not round-trip. It must also understand
   `--mcp-config <file> --strict-mcp-config`, the way Claude Code's `claude -p` does; a judge CLI
   with no MCP support can still run, but never calls `search`/`fetch_url`, so `usage.searches` and
-  `usage.fetches` honestly read 0 and the verdict rests on whatever the model already knows.
-- **`__mcp-serve` is an undocumented, internal subcommand** — the MCP search server `recheck`/
+  `usage.fetches` report `null` (unknown) rather than a verified zero, and the verdict rests on
+  whatever the model already knows.
+- **`__mcp-serve` is a subcommand not listed in `--help`** — the MCP search server `recheck`/
   `punch` spawns as a child of the judge process, over its own stdio. It is never meant to be run
   by a human and carries no stability guarantee across versions.
 - **Pass 2's repo context is v0-minimal.** The README comes straight from `<path>/README.md`; open
   issues have no live lookup yet — set `PAWPIE_PASS2_ISSUES_FIXTURE` to a file's path to supply
-  them, otherwise question 4 (`changed-spec`) is reported `unchecked` whenever the judge cannot
-  answer it from the README alone. Agent capabilities are read the same way, from
-  `PAWPIE_AGENT_CAPABILITIES` — with neither set, question 3 (`new-make-abilities`) is `unchecked`
-  by default.
+  them. Question 4 (`changed-spec`) is reported `unchecked` only when **both** the README and the
+  issues fixture are unavailable; question 3 (`new-make-abilities`) depends only on
+  `PAWPIE_AGENT_CAPABILITIES` and is `unchecked` whenever that isn't set. Both are enforced in code
+  (`pass2QuestionAvailable` in `src/judge.ts`), not left to the judge's honesty.
 
 ## The one writing rule
 
@@ -207,7 +208,9 @@ run. Reading it tolerates a leading UTF-8 BOM and both `\n` and `\r\n` line endi
 the same ADR on the same date: the later line in the file wins. When a run raises more than one
 claim/question, every raise's note is folded onto that one line, tagged with its pass
 (`pass1:taken`, `pass1:not-taken`, or `pass2:<question>`) and joined with `; ` — the full evidence
-(source and quote) for each raise is only in the `--json` record, not the sidecar row.
+(source and quote) for each raise is only in the `--json` record, not the sidecar row. When a
+pass-2 question went unchecked, the row's note ends with `; unchecked: <question>,<question>` so
+the sidecar itself never reads as "fully clear" for a run that couldn't check everything.
 
 ## Known input shapes
 
@@ -240,16 +243,25 @@ guarantee.
 `pawpie-recheck@1` covers two shapes, told apart by `ok`:
 
 - **`ok: true`** — `id`, `outcome` (`clear` or `raised`), `raises[]` (each with `pass` of `1` or
-  `2`; a pass-1 raise carries `claim: {text, disposition}`, a pass-2 raise carries `question` of
-  `new-options` / `changed-capabilities` / `new-make-abilities` / `changed-spec`; both carry `note`
-  and `evidence: {source, quote}`), `extractedClaims[]` (each `{text, disposition}`, populated only
-  when the ADR carried no usable `## Claims`), `unchecked[]` (question ids pass 2 could not check),
-  `usage: {searches, fetches, judgeCalls}` (`searches`/`fetches` are `null`, never a false `0`, when
-  the count is genuinely unknown — the search server never started, or its counts file never
-  wrote), `exitCode` (0 clear, 10 raised).
+  `2`; a pass-1 raise carries `claim: {text, disposition}` and must name one of the ADR's own
+  recorded claims — a judge answer naming any other claim is rejected as `judge-failed`; a pass-2
+  raise carries `question` of `new-options` / `changed-capabilities` / `new-make-abilities` /
+  `changed-spec`, rejected the same way if its input was unavailable; both carry `note` and
+  `evidence: {source, quote}`, both required non-empty), `extractedClaims[]` (each
+  `{text, disposition}` — non-empty when the ADR carried no usable `## Claims` [the judge must
+  extract at least one], empty and required to stay empty otherwise), `unchecked[]` (question ids
+  pass 2 could not check — force-included whenever the input a question needs was unavailable,
+  regardless of what the judge itself reports), `usage: {searches, fetches, searchErrors,
+  fetchErrors, judgeCalls}` (`searches`/`fetches`/`searchErrors`/`fetchErrors` are `null`, never a
+  false `0`, when the count is genuinely unknown — the search server never started, or its counts
+  file never wrote or came back malformed; a failed search/fetch call increments its `*Errors`
+  count separately from the successful-call count), `exitCode` (0 clear, 10 raised).
 - **`ok: false`** — `id` (`null` when none was given), `message`, `exitCode` (2 or 1), and `reason`
   of `missing-id` / `usage-error` / `adr-dir-unreadable` / `adr-not-found` / `adr-invalid` /
-  `search-not-configured` (exit 2), or `judge-failed` / `sidecar-unwritable` (exit 1).
+  `search-not-configured` / `pass2-context-unreadable` (exit 2), or `judge-failed` /
+  `sidecar-unwritable` (exit 1) — a `sidecar-unwritable` refusal also carries `verdict` (the same
+  shape as the `ok: true` fields above, minus `id`/`exitCode`), since the judge already completed a
+  full, uncapped research run by the time the sidecar append failed.
 
 Two ADRs that tie on last-check date (or are both never-checked) sort by ADR id, numerically —
 `0010` after `0009`, not before it lexically.

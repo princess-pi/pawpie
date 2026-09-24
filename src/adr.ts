@@ -92,8 +92,10 @@ export const UNFILLED_CLAIMS_PLACEHOLDER =
 
 // The separator is an em or en dash only, never a plain hyphen — a claim's
 // own text (e.g. "re-copies") routinely contains hyphens, and a plain-hyphen
-// separator would split on the wrong one.
-const CLAIM_LINE = /^-\s*\[(taken|not-taken)\]\s*(.+?)\s[—–]\s(\S.*)$/;
+// separator would split on the wrong one. Greedy `.+` (not lazy `.+?`) splits
+// at the LAST spaced dash, not the first — a claim text containing its own
+// spaced dash ("X — faster than Y") must not truncate at that inner dash.
+const CLAIM_LINE = /^-\s*\[(taken|not-taken)\]\s*(.+)\s[—–]\s(\S.*)$/;
 
 // Lenient the way sidecar.ts's line reader is: a line that doesn't match the
 // shape is skipped rather than refusing the whole scan over one typo.

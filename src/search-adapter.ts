@@ -17,8 +17,8 @@ export interface FixtureData {
 }
 
 // Returns the same canned results for any query, and the same canned text
-// for any fetched URL (or a per-URL override) — enough to drive the three
-// trigger fixtures without a real search backend.
+// for any fetched URL (or a per-URL override) — a fixture backend for tests,
+// with no real search call.
 export function createFixtureAdapter(fixture: FixtureData): SearchAdapter {
   return {
     async search(_query: string): Promise<SearchHit[]> {

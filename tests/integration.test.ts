@@ -6,8 +6,8 @@ import * as path from "node:path";
 import { runRecheck } from "../src/recheck.ts";
 import { adrDirOf, makeTempRepo, writeAdrFile } from "./support.ts";
 
-// A real MCP client, in about 20 lines, standing in for the judge CLI in a
-// test: it spawns the search server named in its own --mcp-config, calls the
+// A real MCP client standing in for the judge CLI in a test: it spawns the
+// search server named in its own --mcp-config, calls the
 // "search" tool once, and raises exactly when a fixture hit's title carries
 // the marker below — proving the fixture adapter's results actually reach a
 // judge process through the real MCP wiring, not just the verdict validator.
@@ -83,7 +83,7 @@ describe("integration: fixture adapter -> real MCP server -> a judge that actual
     writeAdrFile(
       repo,
       "0001-use-bun.md",
-      "# 0001. Use bun for the toolchain\n\n- **Date:** 2026-01-01\n\n## Problem\n\nwhich javascript package manager to standardize on\n\n## Decision\n",
+      "# 0001. Use bun for the toolchain\n\n- **Date:** 2026-01-01\n\n## Problem\n\nwhich javascript package manager to standardize on\n\n## Decision\n\n## Claims\n\n- [taken] bun hardlinks packages from a global cache — https://bun.sh/docs/install/cache\n",
     );
 
     const result = runRecheck(repo, "0001", {
@@ -117,7 +117,7 @@ describe("integration: fixture adapter -> real MCP server -> a judge that actual
     writeAdrFile(
       repo,
       "0001-use-bun.md",
-      "# 0001. Use bun for the toolchain\n\n- **Date:** 2026-01-01\n\n## Problem\n\nwhich javascript package manager to standardize on\n\n## Decision\n",
+      "# 0001. Use bun for the toolchain\n\n- **Date:** 2026-01-01\n\n## Problem\n\nwhich javascript package manager to standardize on\n\n## Decision\n\n## Claims\n\n- [taken] bun hardlinks packages from a global cache — https://bun.sh/docs/install/cache\n",
     );
 
     const result = runRecheck(repo, "0001", {
@@ -130,10 +130,11 @@ describe("integration: fixture adapter -> real MCP server -> a judge that actual
     expect(result.outcome).toBe("clear");
   });
 
-  test("the built CLI's --json output round-trips the same real pipeline", () => {
-    const bundle = path.resolve(import.meta.dirname, "..", "bin", "pawpie.mjs");
-    if (!fs.existsSync(bundle)) return; // requires `bun run build` first, same convention as cli.test.ts
-
+  const bundle = path.resolve(import.meta.dirname, "..", "bin", "pawpie.mjs");
+  // `bun run build` produces this; reported as skipped (not silently passed)
+  // when the suite runs without a build having been done first — same
+  // convention as cli.test.ts's own bundle-dependent test.
+  test.skipIf(!fs.existsSync(bundle))("the built CLI's --json output round-trips the same real pipeline", () => {
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-integration-"));
     const judgeScript = writeMcpClientJudge(workDir);
     const fixture = fixtureFile(workDir, `${RAISE_MARKER} everywhere`);
@@ -142,7 +143,7 @@ describe("integration: fixture adapter -> real MCP server -> a judge that actual
     writeAdrFile(
       repo,
       "0001-use-bun.md",
-      "# 0001. Use bun for the toolchain\n\n- **Date:** 2026-01-01\n\n## Problem\n\nwhich javascript package manager to standardize on\n\n## Decision\n",
+      "# 0001. Use bun for the toolchain\n\n- **Date:** 2026-01-01\n\n## Problem\n\nwhich javascript package manager to standardize on\n\n## Decision\n\n## Claims\n\n- [taken] bun hardlinks packages from a global cache — https://bun.sh/docs/install/cache\n",
     );
 
     const proc = spawnSync("node", [bundle, "punch", "0001", repo, "--json"], {

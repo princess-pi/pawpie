@@ -48,6 +48,10 @@ export interface JudgeUsage {
   // verified "no tool calls happened".
   searches: number | null;
   fetches: number | null;
+  // A failed search/fetch call, counted separately so an all-failing backend
+  // is visibly distinct from a judge that simply made no calls.
+  searchErrors: number | null;
+  fetchErrors: number | null;
   judgeCalls: number;
 }
 
@@ -70,11 +74,22 @@ export interface Pass2Context {
   agentCapabilities: string | null;
 }
 
-function contextBlock(label: string, text: string | null, question: Question): string {
-  if (text === null) {
-    return `${label}: UNAVAILABLE. Report question "${question}" in "unchecked" — never guess "no change".`;
-  }
-  return `${label}:\n${text}`;
+const MAX_CONTEXT_CHARS = 20_000;
+
+function contextBlock(label: string, text: string | null): string {
+  if (text === null) return `${label}: UNAVAILABLE.`;
+  if (text.length <= MAX_CONTEXT_CHARS) return `${label}:\n${text}`;
+  return `${label} (truncated to the first ${MAX_CONTEXT_CHARS} characters of a longer document):\n${text.slice(0, MAX_CONTEXT_CHARS)}`;
+}
+
+// Whether the input pass 2 needs for a given question is available at all —
+// used both to phrase the prompt and, after the judge answers, to force that
+// question into `unchecked` when it truly was, regardless of what the judge
+// says (see the post-hoc enforcement in runJudge).
+export function pass2QuestionAvailable(question: Question, pass2: Pass2Context): boolean {
+  if (question === "changed-spec") return pass2.readme !== null || pass2.openIssues !== null;
+  if (question === "new-make-abilities") return pass2.agentCapabilities !== null;
+  return true;
 }
 
 export function buildPrompt(
@@ -86,35 +101,45 @@ export function buildPrompt(
   const claimsSection =
     claims === null
       ? `This ADR carries no usable "## Claims" section. Extract the claims yourself from its \
-prose — every claim behind the road taken and every road not taken — and report them under \
-"extractedClaims" (never write them back into the ADR). Then run pass 1 against what you extracted.`
-      : `Pass 1 works over exactly these recorded claims — do not invent more:\n${claims
+prose — every claim behind the road taken and every road not taken — and report at least one \
+under "extractedClaims" (never write them back into the ADR). Then run pass 1 against what you \
+extracted.`
+      : `Pass 1 works over exactly these recorded claims — do not invent more, and leave \
+"extractedClaims" empty:\n${claims
           .map((c, i) => `${i + 1}. [${c.disposition}] ${c.text} (source: ${c.source})`)
           .join("\n")}`;
 
+  const changedSpecAvailable = pass2QuestionAvailable("changed-spec", pass2);
+  const abilitiesAvailable = pass2QuestionAvailable("new-make-abilities", pass2);
+
   return `You are pawpie's judge. You re-triage ADR ${adrId} against today's world, in two passes. \
 You never recommend a replacement decision and never re-decide — pawpie's whole job is triage, not \
-choice. Use the "search" and "fetch_url" tools as many times as you need; there is no cost cap.
+choice. Use the "search" and "fetch_url" tools as many times as you need, working down a cost \
+ladder — vendor/official sources first, then free APIs, then a broader web search; there is no \
+cost cap, so keep going until you are satisfied.
 
 PASS 1 — iterate the claims. ${claimsSection}
 For each claim, check whether it still holds or has changed since the ADR's date. This covers the \
 road taken and every road not taken alike — a road-not-taken claim ("X was rejected because of Y") \
-raises just as much as a road-taken one does.
+raises just as much as a road-taken one does. A pass-1 raise's "claim" must be one of the claims \
+listed above verbatim (text and disposition) — never a claim you invented.
 
 PASS 2 — go back to the original question, independent of the claim list. Read the "## Problem" \
 below and ask exactly these four questions:
 1. "new-options": has any option to buy appeared since the ADR's date that it does not record?
 2. "changed-capabilities": has any tool or option gained or lost a relevant ability?
 3. "new-make-abilities": given today's agent skills and tools, can something now be MADE that had \
-to be bought, or bought that had to be built, differently than when the ADR was researched?
+to be bought, or bought that had to be built, differently than when the ADR was researched? \
+${abilitiesAvailable ? "" : 'No agent-capability input is available below — you cannot check this; report "new-make-abilities" in "unchecked".'}
 4. "changed-spec": has our own requirement moved, so the original question should be asked \
-differently? Judge this against the repo context below, never from general knowledge.
+differently? Judge this against the repo context below, never from general knowledge. \
+${changedSpecAvailable ? "" : 'Neither the README nor open issues are available below — you cannot check this; report "changed-spec" in "unchecked".'}
 
-${contextBlock("Repo README", pass2.readme, "changed-spec")}
+${contextBlock("Repo README", pass2.readme)}
 
-${contextBlock("Open issues", pass2.openIssues, "changed-spec")}
+${contextBlock("Open issues", pass2.openIssues)}
 
-${contextBlock("Installed agent skills/tools", pass2.agentCapabilities, "new-make-abilities")}
+${contextBlock("Installed agent skills/tools", pass2.agentCapabilities)}
 
 Raise on either pass. Every raise names its pass, plus the claim (pass 1) or the question (pass 2) \
 it is about, and carries evidence: a source (a URL, or the repo artifact you read — "README.md", \
@@ -164,12 +189,23 @@ function validateClaimRef(v: unknown, where: string): ClaimRef {
   return { text: c.text, disposition: c.disposition };
 }
 
-function validateVerdict(doc: unknown): JudgeVerdict {
+function claimKey(c: ClaimRef): string {
+  return `${c.disposition}\u0000${c.text}`;
+}
+
+// `recordedClaims` is what pass 1 was actually handed: the parsed
+// `## Claims` list, or null when the judge was told to extract its own.
+// `pass2` is what pass 2 was actually given, used to reject a raise the
+// judge could not honestly have evidence for and to force-report a question
+// as unchecked regardless of what the judge itself claims.
+function validateVerdict(doc: unknown, recordedClaims: Claim[] | null, pass2: Pass2Context): JudgeVerdict {
   if (typeof doc !== "object" || doc === null) throw new JudgeError("judge verdict is not an object");
   const d = doc as Record<string, unknown>;
   if (d.outcome !== "raised" && d.outcome !== "clear") {
     throw new JudgeError(`judge verdict has invalid "outcome": ${JSON.stringify(d.outcome)}`);
   }
+
+  const recordedKeys = recordedClaims ? new Set(recordedClaims.map(claimKey)) : null;
 
   const rawRaises = Array.isArray(d.raises) ? d.raises : [];
   const raises: Raise[] = rawRaises.map((r, i) => {
@@ -191,17 +227,19 @@ function validateVerdict(doc: unknown): JudgeVerdict {
     const note = typeof raise.note === "string" ? raise.note : "";
     if (raise.pass === 1) {
       const claim = validateClaimRef(raise.claim, `raise[${i}].claim`);
+      if (recordedKeys && !recordedKeys.has(claimKey(claim))) {
+        throw new JudgeError(`raise[${i}].claim is not one of the recorded ## Claims: ${JSON.stringify(claim)}`);
+      }
       return { pass: 1, claim, note, evidence: { source: evidence.source, quote: evidence.quote } };
     }
     if (!QUESTIONS.includes(raise.question as Question)) {
       throw new JudgeError(`raise[${i}] has invalid "question": ${JSON.stringify(raise.question)}`);
     }
-    return {
-      pass: 2,
-      question: raise.question as Question,
-      note,
-      evidence: { source: evidence.source, quote: evidence.quote },
-    };
+    const question = raise.question as Question;
+    if (!pass2QuestionAvailable(question, pass2)) {
+      throw new JudgeError(`raise[${i}] answers "${question}", but its input was UNAVAILABLE — no honest evidence was possible`);
+    }
+    return { pass: 2, question, note, evidence: { source: evidence.source, quote: evidence.quote } };
   });
   if (d.outcome === "raised" && raises.length === 0) {
     throw new JudgeError('judge verdict says "raised" but carries no raises');
@@ -213,12 +251,26 @@ function validateVerdict(doc: unknown): JudgeVerdict {
   const extractedClaims = Array.isArray(d.extractedClaims)
     ? d.extractedClaims.map((c, i) => validateClaimRef(c, `extractedClaims[${i}]`))
     : [];
+  if (recordedClaims !== null && extractedClaims.length > 0) {
+    throw new JudgeError('"extractedClaims" must be empty — this ADR already had a recorded ## Claims list');
+  }
+  if (recordedClaims === null && extractedClaims.length === 0) {
+    throw new JudgeError('"extractedClaims" is empty, but this ADR had no recorded ## Claims — the judge must extract at least one');
+  }
 
-  const unchecked = Array.isArray(d.unchecked)
+  const reportedUnchecked = Array.isArray(d.unchecked)
     ? d.unchecked.filter((q): q is Question => QUESTIONS.includes(q as Question))
     : [];
 
-  return { outcome: d.outcome, raises, extractedClaims, unchecked };
+  // Force-add, never trust-only: a judge that ignores the "report unchecked"
+  // instruction must not be able to make an unavailable question read as
+  // "no change" simply by omitting it from its own "unchecked" array.
+  const unchecked = new Set(reportedUnchecked);
+  for (const q of QUESTIONS) {
+    if (!pass2QuestionAvailable(q, pass2)) unchecked.add(q);
+  }
+
+  return { outcome: d.outcome, raises, extractedClaims, unchecked: [...unchecked] };
 }
 
 export interface JudgeOptions {
@@ -269,19 +321,27 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
     }
     const stdout = child.stdout ?? "";
 
-    const verdict = validateVerdict(extractJson(stdout));
+    const verdict = validateVerdict(extractJson(stdout), opts.claims ?? null, pass2);
 
-    let usage: JudgeUsage = { searches: null, fetches: null, judgeCalls: 1 };
+    let usage: JudgeUsage = { searches: null, fetches: null, searchErrors: null, fetchErrors: null, judgeCalls: 1 };
     try {
       const counts: unknown = JSON.parse(fs.readFileSync(countsFile, "utf8"));
+      const c = counts as Record<string, unknown>;
       if (
         typeof counts === "object" &&
         counts !== null &&
-        Number.isInteger((counts as Record<string, unknown>).searches) &&
-        Number.isInteger((counts as Record<string, unknown>).fetches)
+        Number.isInteger(c.searches) &&
+        Number.isInteger(c.fetches) &&
+        Number.isInteger(c.searchErrors) &&
+        Number.isInteger(c.fetchErrors)
       ) {
-        const c = counts as { searches: number; fetches: number };
-        usage = { searches: c.searches, fetches: c.fetches, judgeCalls: 1 };
+        usage = {
+          searches: c.searches as number,
+          fetches: c.fetches as number,
+          searchErrors: c.searchErrors as number,
+          fetchErrors: c.fetchErrors as number,
+          judgeCalls: 1,
+        };
       }
       // A present-but-malformed counts file is treated the same as a
       // missing one — null, unknown — rather than trusting a partial shape.

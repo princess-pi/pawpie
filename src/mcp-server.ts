@@ -5,6 +5,11 @@ import type { SearchAdapter } from "./search-adapter.ts";
 export interface McpCounts {
   searches: number;
   fetches: number;
+  // A failed call still counts as an attempt: without this, a backend that
+  // rejects every call (a bad key, every request 429/401) is indistinguishable
+  // from a judge that simply chose not to search.
+  searchErrors: number;
+  fetchErrors: number;
 }
 
 interface JsonRpcRequest {
@@ -85,6 +90,7 @@ export async function handleMcpRequest(
           // crash this server — an unhandled rejection here would take down
           // the judge's only search tool for the rest of the run, with no
           // JSON-RPC error reaching the caller for this call.
+          counts.searchErrors += 1;
           return respond(toolError(`search failed: ${(err as Error).message}`));
         }
       }
@@ -95,6 +101,7 @@ export async function handleMcpRequest(
           counts.fetches += 1;
           return respond(toolResult(text));
         } catch (err) {
+          counts.fetchErrors += 1;
           return respond(toolError(`fetch failed: ${(err as Error).message}`));
         }
       }
@@ -110,7 +117,7 @@ export async function handleMcpRequest(
 // `judge.ts`, which only configured this server's command/env and never
 // talks to it directly, can read usage back after the judge process exits.
 export function runMcpStdioServer(adapter: SearchAdapter, countsFile?: string): void {
-  const counts: McpCounts = { searches: 0, fetches: 0 };
+  const counts: McpCounts = { searches: 0, fetches: 0, searchErrors: 0, fetchErrors: 0 };
   const rl = readline.createInterface({ input: process.stdin, terminal: false });
 
   rl.on("line", (line) => {

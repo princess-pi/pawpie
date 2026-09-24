@@ -9,7 +9,7 @@ const FIXTURE = {
 describe("mcp-server request handling", () => {
   test("tools/list advertises search and fetch_url", async () => {
     const adapter = createFixtureAdapter(FIXTURE);
-    const counts: McpCounts = { searches: 0, fetches: 0 };
+    const counts: McpCounts = { searches: 0, fetches: 0, searchErrors: 0, fetchErrors: 0 };
     const response = await handleMcpRequest(adapter, counts, { jsonrpc: "2.0", id: 1, method: "tools/list" });
     const names = (response as any).result.tools.map((t: any) => t.name);
     expect(names).toEqual(["search", "fetch_url"]);
@@ -17,7 +17,7 @@ describe("mcp-server request handling", () => {
 
   test("tools/call search returns fixture hits and increments the count", async () => {
     const adapter = createFixtureAdapter(FIXTURE);
-    const counts: McpCounts = { searches: 0, fetches: 0 };
+    const counts: McpCounts = { searches: 0, fetches: 0, searchErrors: 0, fetchErrors: 0 };
     const response = await handleMcpRequest(adapter, counts, {
       jsonrpc: "2.0",
       id: 2,
@@ -32,7 +32,7 @@ describe("mcp-server request handling", () => {
 
   test("tools/call fetch_url returns fixture text and increments the count", async () => {
     const adapter = createFixtureAdapter(FIXTURE);
-    const counts: McpCounts = { searches: 0, fetches: 0 };
+    const counts: McpCounts = { searches: 0, fetches: 0, searchErrors: 0, fetchErrors: 0 };
     const response = await handleMcpRequest(adapter, counts, {
       jsonrpc: "2.0",
       id: 3,
@@ -45,7 +45,7 @@ describe("mcp-server request handling", () => {
 
   test("an unknown tool name returns a JSON-RPC error, not a crash", async () => {
     const adapter = createFixtureAdapter(FIXTURE);
-    const counts: McpCounts = { searches: 0, fetches: 0 };
+    const counts: McpCounts = { searches: 0, fetches: 0, searchErrors: 0, fetchErrors: 0 };
     const response = await handleMcpRequest(adapter, counts, {
       jsonrpc: "2.0",
       id: 4,
@@ -57,7 +57,7 @@ describe("mcp-server request handling", () => {
 
   test("a notification (no id) gets no response", async () => {
     const adapter = createFixtureAdapter(FIXTURE);
-    const counts: McpCounts = { searches: 0, fetches: 0 };
+    const counts: McpCounts = { searches: 0, fetches: 0, searchErrors: 0, fetchErrors: 0 };
     const response = await handleMcpRequest(adapter, counts, {
       jsonrpc: "2.0",
       method: "notifications/initialized",

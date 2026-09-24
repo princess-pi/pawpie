@@ -1,10 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { refuseMissingId, runRecheck } from "../src/recheck.ts";
 import { adrDirOf, fakeJudgeEnv, makeTempRepo, writeAdrFile } from "./support.ts";
 
 const CLEAR_VERDICT = { outcome: "clear", raises: [], extractedClaims: [], unchecked: [] };
+
+// Must match one of ADR_WITH_CLAIMS's recorded claims exactly (text and
+// disposition) — validateVerdict rejects a pass-1 raise on any claim the ADR
+// doesn't actually record.
+const RECORDED_CLAIM_TEXT: Record<"taken" | "not-taken", string> = {
+  taken: "bun hardlinks packages from a global cache",
+  "not-taken": "npm re-copies every package on every install",
+};
 
 function pass1Raise(disposition: "taken" | "not-taken") {
   return {
@@ -12,7 +21,7 @@ function pass1Raise(disposition: "taken" | "not-taken") {
     raises: [
       {
         pass: 1,
-        claim: { text: "bun hardlinks packages from a global cache", disposition },
+        claim: { text: RECORDED_CLAIM_TEXT[disposition], disposition },
         note: `${disposition} claim no longer holds`,
         evidence: { source: "https://example.com/evidence", quote: "this changed" },
       },
@@ -199,6 +208,50 @@ describe("pawpie recheck/punch — refusals", () => {
     expect(result.exitCode).toBe(2);
   });
 
+  test("refuses with search-not-configured when PAWPIE_SEARCH_FIXTURE points at unreadable/invalid JSON", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const badFixture = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-bad-fixture-")), "bad.json");
+    fs.writeFileSync(badFixture, "not json");
+    const env: NodeJS.ProcessEnv = { ...process.env, PAWPIE_SEARCH_FIXTURE: badFixture, PAWPIE_JUDGE_CMD: "node -e process.exit(1)" };
+    delete env.EXA_API_KEY;
+    const result = runRecheck(repo, "0001", { env });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("search-not-configured");
+  });
+
+  test("refuses with pass2-context-unreadable when an explicitly configured context file can't be read", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const env = fakeJudgeEnv(CLEAR_VERDICT);
+    env.PAWPIE_AGENT_CAPABILITIES = "/no/such/file/pawpie-test";
+    const result = runRecheck(repo, "0001", { env });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("pass2-context-unreadable");
+    expect(result.exitCode).toBe(2);
+  });
+
+  test("a sidecar-unwritable refusal still carries the judge's completed verdict", () => {
+    const isRoot = process.getuid !== undefined && process.getuid() === 0;
+    if (isRoot) return;
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    fs.writeFileSync(path.join(adrDirOf(repo), "recheck.tsv"), "");
+    fs.chmodSync(path.join(adrDirOf(repo), "recheck.tsv"), 0o000);
+
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(pass1Raise("taken")) });
+
+    fs.chmodSync(path.join(adrDirOf(repo), "recheck.tsv"), 0o644);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("sidecar-unwritable");
+    expect(result.verdict?.outcome).toBe("raised");
+    expect(result.verdict?.raises).toHaveLength(1);
+  });
+
   test("refuses with a distinct reason when docs/adr/ itself is unreadable", () => {
     const isRoot = process.getuid !== undefined && process.getuid() === 0;
     if (isRoot) return; // root bypasses permission bits
@@ -241,7 +294,18 @@ describe("pawpie recheck/punch — pass 2 (the four questions)", () => {
     test(`a canned "${question}" result raises with that question and its evidence`, () => {
       const repo = makeTempRepo();
       seedAdr(repo);
-      const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(pass2Raise(question)) });
+      // "new-make-abilities" and "changed-spec" are only checkable, and so
+      // only raisable, when their pass-2 input is actually available.
+      const env = fakeJudgeEnv(pass2Raise(question));
+      if (question === "new-make-abilities") {
+        const capsPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-caps-")), "caps.txt");
+        fs.writeFileSync(capsPath, "some skill\n");
+        env.PAWPIE_AGENT_CAPABILITIES = capsPath;
+      }
+      if (question === "changed-spec") {
+        fs.writeFileSync(path.join(repo, "README.md"), "some repo readme\n");
+      }
+      const result = runRecheck(repo, "0001", { env });
 
       expect(result.ok).toBe(true);
       if (!result.ok) return;
@@ -308,6 +372,56 @@ describe("pawpie recheck/punch — claims: recorded vs. extracted", () => {
     if (!result.ok) return;
     expect(result.extractedClaims).toHaveLength(0);
   });
+
+  test("a prose-only ADR whose judge reports zero extractedClaims is judge-failed, not silently accepted as pass 1 done", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo, ADR_PROSE_ONLY);
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(CLEAR_VERDICT) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
+  });
+
+  test("an ADR with recorded claims whose judge still returns extractedClaims is judge-failed", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const verdict = { ...CLEAR_VERDICT, extractedClaims: [{ text: "invented", disposition: "taken" }] };
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(verdict) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
+  });
+
+  test("a pass-1 raise naming a claim the ADR never recorded is judge-failed", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const verdict = {
+      outcome: "raised",
+      raises: [
+        {
+          pass: 1,
+          claim: { text: "a claim this ADR never recorded", disposition: "taken" },
+          note: "x",
+          evidence: { source: "https://a", quote: "q" },
+        },
+      ],
+      extractedClaims: [],
+      unchecked: [],
+    };
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(verdict) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
+  });
+
+  test("a pass-2 raise answering a question with no available input is judge-failed", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(pass2Raise("changed-spec")) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
+  });
 });
 
 describe("pawpie recheck/punch — the sidecar", () => {
@@ -350,7 +464,12 @@ describe("pawpie recheck/punch — the sidecar", () => {
     const verdict = {
       outcome: "raised",
       raises: [
-        { pass: 1, claim: { text: "x", disposition: "taken" }, note: "found X", evidence: { source: "https://a", quote: "q1" } },
+        {
+          pass: 1,
+          claim: { text: "bun hardlinks packages from a global cache", disposition: "taken" },
+          note: "found X",
+          evidence: { source: "https://a", quote: "q1" },
+        },
         { pass: 2, question: "changed-capabilities", note: "price dropped", evidence: { source: "https://b", quote: "q2" } },
       ],
       extractedClaims: [],
@@ -361,7 +480,9 @@ describe("pawpie recheck/punch — the sidecar", () => {
     const row = fs.readFileSync(path.join(adrDirOf(repo), "recheck.tsv"), "utf8").trim();
     const [, , outcome, note] = row.split("\t");
     expect(outcome).toBe("raised");
-    expect(note).toBe("pass1:taken found X; pass2:changed-capabilities price dropped");
+    // "new-make-abilities"/"changed-spec" are force-reported unchecked here
+    // too — this repo has no README and no PAWPIE_AGENT_CAPABILITIES set.
+    expect(note).toBe("pass1:taken found X; pass2:changed-capabilities price dropped; unchecked: new-make-abilities,changed-spec");
   });
 
   test("reports usage as unknown (null), never a false zero, for a judge that never calls its tools", () => {
@@ -370,6 +491,6 @@ describe("pawpie recheck/punch — the sidecar", () => {
     const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(CLEAR_VERDICT) });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.usage).toEqual({ searches: null, fetches: null, judgeCalls: 1 });
+    expect(result.usage).toEqual({ searches: null, fetches: null, searchErrors: null, fetchErrors: null, judgeCalls: 1 });
   });
 });

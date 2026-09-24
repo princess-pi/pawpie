@@ -15,11 +15,16 @@ export interface RecheckRefusal {
     | "adr-not-found"
     | "adr-invalid"
     | "search-not-configured"
+    | "pass2-context-unreadable"
     | "judge-failed"
     | "sidecar-unwritable";
   id: string | null;
   message: string;
   exitCode: 1 | 2;
+  // Populated only for "sidecar-unwritable": the judge already completed a
+  // full (uncapped) research run by the time the append fails, and that
+  // verdict must not be silently discarded along with the refusal.
+  verdict?: { outcome: "raised" | "clear"; raises: Raise[]; extractedClaims: ClaimRef[]; unchecked: Question[]; usage: JudgeUsage };
 }
 
 export interface RecheckResult {
@@ -85,11 +90,11 @@ function appendSidecarLine(adrDir: string, id: string, outcome: "raised" | "clea
   fs.appendFileSync(sidecarPath, row, "utf8");
 }
 
-function noteFor(raises: Raise[]): string {
-  if (raises.length === 0) return "clear";
-  return raises
-    .map((r) => `${r.pass === 1 ? `pass1:${r.claim.disposition}` : `pass2:${r.question}`} ${r.note}`)
-    .join("; ");
+function noteFor(raises: Raise[], unchecked: Question[]): string {
+  const raiseNotes = raises.map((r) => `${r.pass === 1 ? `pass1:${r.claim.disposition}` : `pass2:${r.question}`} ${r.note}`);
+  const parts = raiseNotes.length === 0 ? ["clear"] : raiseNotes;
+  if (unchecked.length > 0) parts.push(`unchecked: ${unchecked.join(",")}`);
+  return parts.join("; ");
 }
 
 // null means "no usable ## Claims section" — judge.ts reads that as an
@@ -102,11 +107,14 @@ function claimsFor(adrContent: string): Claim[] | null {
 }
 
 // Pass 2's "changed-spec" and "new-make-abilities" questions need context the
-// web cannot answer. Both are best-effort and explicitly opt-in for the repo
-// lookup (never attempted in a test, and never silently attempted against a
-// directory that isn't actually a GitHub-backed repo): missing input is
-// reported to the judge as UNAVAILABLE, per the issue's own instruction that
-// this must read "unchecked", never "no change".
+// web cannot answer. The README is read unconditionally (every run, tests
+// included — there is no GitHub check, and none is needed for a local file);
+// open issues and agent capabilities have no live lookup yet in v0 and come
+// only from an explicitly configured fixture path. Missing input is reported
+// to the judge as UNAVAILABLE, per the issue's own "unchecked, never no
+// change" instruction — but a path the caller DID set and that fails to read
+// is a misconfiguration, not "unavailable", so it is surfaced instead of
+// silently swallowed (see the two `Env is set` checks in runRecheck).
 function gatherPass2Context(repoPath: string, env: NodeJS.ProcessEnv): Pass2Context {
   let readme: string | null = null;
   try {
@@ -115,23 +123,8 @@ function gatherPass2Context(repoPath: string, env: NodeJS.ProcessEnv): Pass2Cont
     readme = null;
   }
 
-  let openIssues: string | null = null;
-  if (env.PAWPIE_PASS2_ISSUES_FIXTURE) {
-    try {
-      openIssues = fs.readFileSync(env.PAWPIE_PASS2_ISSUES_FIXTURE, "utf8");
-    } catch {
-      openIssues = null;
-    }
-  }
-
-  let agentCapabilities: string | null = null;
-  if (env.PAWPIE_AGENT_CAPABILITIES) {
-    try {
-      agentCapabilities = fs.readFileSync(env.PAWPIE_AGENT_CAPABILITIES, "utf8");
-    } catch {
-      agentCapabilities = null;
-    }
-  }
+  const openIssues = env.PAWPIE_PASS2_ISSUES_FIXTURE ? fs.readFileSync(env.PAWPIE_PASS2_ISSUES_FIXTURE, "utf8") : null;
+  const agentCapabilities = env.PAWPIE_AGENT_CAPABILITIES ? fs.readFileSync(env.PAWPIE_AGENT_CAPABILITIES, "utf8") : null;
 
   return { readme, openIssues, agentCapabilities };
 }
@@ -148,12 +141,20 @@ function searchAdapterEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 // Checked in the parent process before the judge ever runs: an unconfigured
-// backend must refuse loudly here, not fail silently inside the spawned MCP
-// server (where `createSearchAdapterFromEnv`'s own throw is invisible to the
-// judge — it just proceeds with no tools, and a resulting "clear" verdict
-// would misrepresent a decision that was never actually searched).
+// OR unreadable/unparseable backend must refuse loudly here, not fail
+// silently inside the spawned MCP server (where `createSearchAdapterFromEnv`'s
+// own throw is invisible to the judge — it just proceeds with no tools, and a
+// resulting "clear" verdict would misrepresent a decision that was never
+// actually searched).
 function searchConfigError(env: NodeJS.ProcessEnv): string | null {
-  if (env.PAWPIE_SEARCH_FIXTURE) return null;
+  if (env.PAWPIE_SEARCH_FIXTURE) {
+    try {
+      JSON.parse(fs.readFileSync(env.PAWPIE_SEARCH_FIXTURE, "utf8"));
+    } catch (err) {
+      return `PAWPIE_SEARCH_FIXTURE (${env.PAWPIE_SEARCH_FIXTURE}) could not be read as JSON: ${(err as Error).message}`;
+    }
+    return null;
+  }
   if (!env.EXA_API_KEY || env.EXA_API_KEY.trim() === "") {
     return "no search backend is configured: set EXA_API_KEY, or PAWPIE_SEARCH_FIXTURE for a test fixture";
   }
@@ -226,6 +227,20 @@ export function runRecheck(
 
   const adrContent = fs.readFileSync(path.join(adrDir, adr.file), "utf8");
 
+  let pass2: Pass2Context;
+  try {
+    pass2 = gatherPass2Context(repoPath, env);
+  } catch (err) {
+    return {
+      schema: "pawpie-recheck@1",
+      ok: false,
+      reason: "pass2-context-unreadable",
+      id,
+      message: `a configured pass-2 context file could not be read: ${(err as Error).message}`,
+      exitCode: 2,
+    };
+  }
+
   let judged;
   try {
     judged = runJudge(id, adrContent, {
@@ -233,7 +248,7 @@ export function runRecheck(
       selfCommand: opts.selfCommand,
       searchAdapterEnv: searchAdapterEnv(env),
       claims: claimsFor(adrContent),
-      pass2: gatherPass2Context(repoPath, env),
+      pass2,
     });
   } catch (err) {
     const message = err instanceof JudgeError ? err.message : `judge invocation failed: ${(err as Error).message}`;
@@ -241,7 +256,7 @@ export function runRecheck(
   }
 
   try {
-    appendSidecarLine(adrDir, id, judged.verdict.outcome, noteFor(judged.verdict.raises));
+    appendSidecarLine(adrDir, id, judged.verdict.outcome, noteFor(judged.verdict.raises, judged.verdict.unchecked));
   } catch (err) {
     return {
       schema: "pawpie-recheck@1",
@@ -250,6 +265,13 @@ export function runRecheck(
       id,
       message: `could not append to ${path.join(adrDir, "recheck.tsv")}: ${(err as Error).message}`,
       exitCode: 1,
+      verdict: {
+        outcome: judged.verdict.outcome,
+        raises: judged.verdict.raises,
+        extractedClaims: judged.verdict.extractedClaims,
+        unchecked: judged.verdict.unchecked,
+        usage: judged.usage,
+      },
     };
   }
 

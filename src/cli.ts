@@ -41,8 +41,10 @@ Exit codes:
       or newline-containing title for 'new', no ADR directory or an
       unreadable ADR directory/sidecar for 'list', an unwritable ADR
       directory for 'new' (or an unreadable ADR directory/sidecar, naming
-      that path instead), or recheck/punch with no id, an unknown id, or
-      an ADR that already fails its own 'list' checks
+      that path instead), or recheck/punch with no id, an unreadable ADR
+      directory, an unknown id, an ADR that already fails its own 'list'
+      checks, no search backend configured, or an unreadable/malformed
+      PAWPIE_SEARCH_FIXTURE or pass-2 context file
   3   an ADR is present and checks nothing: no ## Problem, no date in any
       known shape, unreadable, or a duplicate number — also returned by
       'new' when the directory already has a duplicate number
@@ -224,14 +226,18 @@ function runRecheckCommand(
 
   if (json) stdout(JSON.stringify(result));
   else if (!result.ok) stderr(`pawpie: ${result.message}`);
-  else if (result.outcome === "clear") stdout(`${result.id}: clear`);
   else {
-    stdout(`${result.id}: raised`);
-    for (const raise of result.raises) {
-      const label = raise.pass === 1 ? `pass 1, ${raise.claim.disposition} claim` : `pass 2, ${raise.question}`;
-      stdout(`  [${label}] ${raise.note}`);
-      stdout(`    ${raise.evidence.source} — "${raise.evidence.quote}"`);
+    if (result.outcome === "clear") stdout(`${result.id}: clear`);
+    else {
+      stdout(`${result.id}: raised`);
+      for (const raise of result.raises) {
+        const label = raise.pass === 1 ? `pass 1, ${raise.claim.disposition} claim` : `pass 2, ${raise.question}`;
+        stdout(`  [${label}] ${raise.note}`);
+        stdout(`    ${raise.evidence.source} — "${raise.evidence.quote}"`);
+      }
     }
+    // Printed for "clear" too — a quiet run is never read as "everything is
+    // current" when a pass-2 question went unchecked for lack of input.
     if (result.unchecked.length > 0) {
       stdout(`  unchecked: ${result.unchecked.join(", ")} (missing repo/agent context)`);
     }
