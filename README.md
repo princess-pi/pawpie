@@ -78,15 +78,26 @@ argument, is a usage error (exit 2) rather than being read as a positional argum
   keep `0002` excluded.
 - **A sidecar `<adr_id>` is normalized** the same way a scanned file's id is: `4` and `00004` both
   match ADR `0004`.
+- **`new` is not safe to run concurrently.** Two overlapping `pawpie new` calls can both compute
+  the same free number and each write a distinct file under it, leaving a duplicate — `pawpie` does
+  no file locking or atomic reservation in v0. `list` catches the result on its next run (a
+  duplicate number is exit 3, naming both files), so the failure mode is a loud refusal on the next
+  scan, not silent data loss. Fixing the race itself is out of scope for a tool meant to be run
+  interactively, one command at a time.
+- **An ADR number is a JS `Number`,** so a filename numbered above
+  `Number.MAX_SAFE_INTEGER` (2^53 − 1) can collide with a different absurdly large number instead
+  of being told apart. Not a concern at any number of ADRs a human writes by hand.
 
 ## The one writing rule
 
 An ADR needs a `## Problem` section that states the problem **without naming any of the options**:
 the query you would type into a search two years later. `list` warns when the chosen option's name
-appears inside its own `## Problem`. The check is a heuristic, and a narrow one: it only compares
-title words of 4+ letters (skipping a short stopword list), so a short option name — `bun`, `npm`,
-most tool names — can be reused in the Problem text and pass with no warning. It catches the common
-case and not every case.
+appears inside its own `## Problem`. The check is a heuristic, and a blunt one: it compares every
+run of 4+ alphanumeric characters in the title (skipping a short stopword list; a year like `2026`
+counts) against the Problem text — not specifically the chosen option's name. So it can both **miss**
+a short option name (`bun`, `npm`, most tool names, all under 4 letters) reused verbatim, and
+**warn** on an unrelated shared word (a generic domain term repeated from the title). It catches the
+common case and not every case, in either direction.
 
 ## Recheck sidecar
 

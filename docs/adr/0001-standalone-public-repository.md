@@ -4,10 +4,9 @@
 
 ## Problem
 
-Where should the code for a new small agent utility live: folded into an
-existing multi-purpose repo, tucked inside a private planning repo, or
-somewhere else — and does the answer change once the utility is meant to be
-usable and readable by people outside the team that built it?
+Where should the code for a new small agent utility live, and does that
+choice change once the utility is meant to be usable and readable by people
+outside the team that built it?
 
 ## Decision
 

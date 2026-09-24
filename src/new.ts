@@ -31,7 +31,7 @@ export function createAdr(repoPath: string, title: string): NewAdrResult {
       ok: false,
       error: {
         kind: "duplicate-number",
-        message: "docs/adr/ already has a duplicated ADR number — fix that before adding a new one",
+        message: `${adrDir} already has a duplicated ADR number — fix that before adding a new one`,
       },
     };
   }

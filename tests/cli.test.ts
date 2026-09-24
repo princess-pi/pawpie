@@ -73,8 +73,7 @@ describe("pawpie cli", () => {
     }
   });
 
-  // root bypasses permission bits, so these three report as SKIPPED under
-  // root rather than passing without having asserted anything.
+  // root bypasses permission bits.
   const isRoot = process.getuid !== undefined && process.getuid() === 0;
 
   test.skipIf(isRoot)("an unreadable ADR directory is a distinct refusal, not a silent empty list", () => {
@@ -170,6 +169,13 @@ describe("pawpie cli", () => {
 
     const c2 = captured();
     expect(run(["list", repo], c2.stdout, c2.stderr)).toBe(0);
+  });
+
+  test("new reports the path it actually wrote to, not a hardcoded docs/adr/", () => {
+    const repo = makeTempRepo();
+    const c = captured();
+    run(["new", "A title", repo], c.stdout, c.stderr);
+    expect(c.out[0]).toBe(`created ${path.join(repo, "docs", "adr", "0001-a-title.md")}`);
   });
 
   test("new rejects --json as an unknown flag rather than silently accepting it", () => {

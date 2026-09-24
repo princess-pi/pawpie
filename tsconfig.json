@@ -7,11 +7,6 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "skipLibCheck": true,
-    // Deliberately NOT "bun-types": src/**/*.ts is bundled by `bun run build`
-    // into bin/pawpie.mjs, which must run on stock node — a stray `Bun.*`
-    // global would compile with bun-types in scope and only fail at a
-    // consumer's `npx`. tsconfig.test.json covers tests/, which need
-    // `bun:test` and run under `bun test` itself.
     "types": ["node"]
   },
   "include": ["src/**/*.ts"]

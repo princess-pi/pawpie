@@ -2,7 +2,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ReadFailure } from "./errors.ts";
+import { ReadFailure, errorCode } from "./errors.ts";
 import { buildListResult, refuseList, renderListText } from "./list.ts";
 import { createAdr } from "./new.ts";
 import { refuseRecheck, refuseRecheckUsage } from "./recheck.ts";
@@ -109,6 +109,15 @@ function runList(args: string[], stdout: (s: string) => void, stderr: (s: string
   try {
     result = buildListResult(repoPath);
   } catch (err) {
+    // The preflight stat above found a directory; if it is gone by the time
+    // buildListResult reads it, that is the same "no ADR directory" case,
+    // not an unreadable one — a race, not a permissions problem.
+    if (errorCode(err) === "ENOENT") {
+      const refusal = refuseList(repoPath, "no-adr-directory", `no ADR directory at ${adrDir}`);
+      if (json) stdout(JSON.stringify(refusal));
+      else stderr(`pawpie: ${refusal.message}`);
+      return refusal.exitCode;
+    }
     const message = err instanceof ReadFailure ? err.message : `could not read ${adrDir}: ${(err as Error).message}`;
     const refusal = refuseList(repoPath, "unreadable", message);
     if (json) stdout(JSON.stringify(refusal));
@@ -153,7 +162,7 @@ function runNew(args: string[], stdout: (s: string) => void, stderr: (s: string)
     stderr(`pawpie: ${result.error.message}`);
     return 3;
   }
-  stdout(`created docs/adr/${result.file}`);
+  stdout(`created ${path.join(adrDir, result.file)}`);
   return 0;
 }
 

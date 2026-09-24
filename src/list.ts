@@ -14,7 +14,7 @@ export interface ListedAdr {
 }
 
 export const PROBLEM_WARNING_CAVEAT =
-  "heuristic, not exhaustive — only compares title words of 4+ letters against the Problem text; a short option name can pass unnoticed";
+  "heuristic, not exhaustive — compares every title run of 4+ alphanumeric characters (digits count) against the Problem text, not just the chosen option's name; can both miss a short option name and warn on an unrelated shared word";
 
 export interface ListResult {
   schema: "pawpie-list@1";
@@ -113,9 +113,7 @@ export function renderListText(result: ListResult): string {
       : "never checked";
     lines.push(`${adr.id}  ${title}  [${adr.date ?? "no date"}]  ${check}`);
     if (adr.problemWarning) {
-      lines.push(
-        `  warning: ## Problem may name the chosen option (heuristic, not exhaustive)`,
-      );
+      lines.push(`  warning: ## Problem may name the chosen option (${result.problemWarningCaveat})`);
     }
     if (adr.error) {
       lines.push(`  error: ${adr.error.message}`);

@@ -40,7 +40,9 @@ function parseLeadingNumber(filename: string): number {
 
 const DATE_SHAPES: RegExp[] = [
   /^-\s*\*\*Date:\*\*\s*(\d{4}-\d{2}-\d{2})/m,
-  /\*\*Status:\*\*\s*accepted\s*[—-]\s*[^,\n]*,\s*(\d{4}-\d{2}-\d{2})/,
+  // Greedy `[^\n]*` backtracks to the LAST ", YYYY-MM-DD" on the line, so a
+  // <who> that itself contains a comma (e.g. two names) still matches.
+  /\*\*Status:\*\*\s*accepted\s*[—–-]\s*[^\n]*,\s*(\d{4}-\d{2}-\d{2})/,
   /\*\*Status:\*\*\s*accepted\s*\(\s*(\d{4}-\d{2}-\d{2})/,
 ];
 
@@ -74,8 +76,11 @@ const STOPWORDS = new Set([
   "does", "each", "when", "what", "which", "should", "would",
 ]);
 
-// Heuristic only: catches a title word reused verbatim inside the Problem
-// section. It does not catch a paraphrase, and the CLI output says so.
+// Heuristic only, and a blunt one: it checks EVERY non-stopword title run of
+// 4+ alphanumeric characters (a year like "2026" counts) against the Problem
+// text, not just the chosen option's own name. So it can both miss a short
+// option name and warn on an unrelated shared domain word. The CLI output
+// says so (PROBLEM_WARNING_CAVEAT, list.ts).
 export function problemNamesChosenOption(title: string, problemText: string): boolean {
   const words = title
     .toLowerCase()
@@ -86,16 +91,12 @@ export function problemNamesChosenOption(title: string, problemText: string): bo
   return words.some((w) => new RegExp(`\\b${w}\\b`).test(lowerProblem));
 }
 
+// Any failure here — including ENOENT — propagates to the caller rather
+// than being read as "empty": a caller mid-preflight has already decided
+// what ENOENT means, and swallowing it here would let a directory deleted
+// between that check and this scan look like a valid empty repo.
 export function scanAdrDir(adrDir: string): ScanResult {
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(adrDir).filter(isAdrFilename).sort();
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return { adrs: [], scanned: 0 };
-    }
-    throw err;
-  }
+  const entries = fs.readdirSync(adrDir).filter(isAdrFilename).sort();
 
   const numberToFiles = new Map<string, string[]>();
   const records: AdrRecord[] = [];
@@ -110,7 +111,7 @@ export function scanAdrDir(adrDir: string): ScanResult {
     let content: string;
     try {
       content = fs.readFileSync(path.join(adrDir, file), "utf8");
-    } catch {
+    } catch (err) {
       records.push({
         id,
         number,
@@ -118,7 +119,7 @@ export function scanAdrDir(adrDir: string): ScanResult {
         title: null,
         date: null,
         problemWarning: false,
-        error: { kind: "unreadable", message: `${file}: could not be read` },
+        error: { kind: "unreadable", message: `${file}: could not be read: ${(err as Error).message}` },
       });
       continue;
     }
@@ -129,8 +130,10 @@ export function scanAdrDir(adrDir: string): ScanResult {
     const problemIsUnfilled = problemText !== null && problemText.trim().length === 0;
 
     let error: AdrError | null = null;
-    if (problemText === null || problemIsUnfilled) {
+    if (problemText === null) {
       error = { kind: "no-problem", message: `${file}: no ## Problem section` };
+    } else if (problemIsUnfilled) {
+      error = { kind: "no-problem", message: `${file}: ## Problem section is empty` };
     } else if (date === null) {
       error = { kind: "no-date", message: `${file}: no date in any known shape` };
     }

@@ -19,7 +19,7 @@ export function readSidecar(sidecarPath: string): CheckEntry[] {
   }
   if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
   const entries: CheckEntry[] = [];
-  for (const line of content.split("\n")) {
+  for (const line of content.split(/\r?\n/)) {
     if (line.trim() === "") continue;
     const parts = line.split("\t");
     if (parts.length < 4) continue;
