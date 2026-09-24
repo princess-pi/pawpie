@@ -1,0 +1,32 @@
+{
+  "name": "@princess-pi/pawpie",
+  "version": "0.1.0",
+  "description": "pawpie — re-triage decision records (ADRs) when the world moves",
+  "license": "MIT-0",
+  "author": {
+    "name": "Princess Pi",
+    "email": "princess-pi@agentic-arts.ai",
+    "url": "https://github.com/duppypro"
+  },
+  "type": "module",
+  "bin": {
+    "pawpie": "./bin/pawpie.mjs"
+  },
+  "files": [
+    "bin/pawpie.mjs"
+  ],
+  "scripts": {
+    "build": "bun build src/cli.ts --outfile bin/pawpie.mjs --target node --format esm",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "prepare": "if [ ! -d node_modules/typescript ]; then bun install; fi && bun run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^26",
+    "bun-types": "latest",
+    "typescript": "^7"
+  }
+}

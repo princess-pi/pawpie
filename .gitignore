@@ -1,0 +1,17 @@
+node_modules/
+package-lock.json
+
+# Secrets baseline — Step D (recheck/punch) will hold an API key.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.DS_Store
+
+# Build output. `prepare` (`bun run build`) regenerates this, so it is never
+# committed.
+bin/*.mjs
+
+.claude/worktrees/
+tmp/
