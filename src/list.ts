@@ -101,22 +101,32 @@ export function refuseList(
   return { schema: "pawpie-list@1", ok: false, reason, path: repoPath, message, exitCode: 2 };
 }
 
+// ADR titles come from file content, and a sidecar's date/note columns are
+// unvalidated free text — either can carry a terminal escape sequence (e.g.
+// OSC 52, which can write the invoking user's clipboard). Strip C0 controls
+// and DEL before any of it reaches a terminal via the text renderer.
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\x00-\x1f\x7f]/g;
+function sanitizeForTerminal(s: string): string {
+  return s.replace(CONTROL_CHARS, "");
+}
+
 export function renderListText(result: ListResult): string {
   if (result.adrs.length === 0) {
     return "No ADRs found.";
   }
   const lines: string[] = [];
   for (const adr of result.adrs) {
-    const title = adr.title ?? "(untitled)";
+    const title = sanitizeForTerminal(adr.title ?? "(untitled)");
     const check = adr.lastCheck
-      ? `last checked ${adr.lastCheck.date} (${adr.lastCheck.outcome})`
+      ? `last checked ${sanitizeForTerminal(adr.lastCheck.date)} (${adr.lastCheck.outcome})`
       : "never checked";
     lines.push(`${adr.id}  ${title}  [${adr.date ?? "no date"}]  ${check}`);
     if (adr.problemWarning) {
       lines.push(`  warning: ## Problem may name the chosen option (${result.problemWarningCaveat})`);
     }
     if (adr.error) {
-      lines.push(`  error: ${adr.error.message}`);
+      lines.push(`  error: ${sanitizeForTerminal(adr.error.message)}`);
     }
   }
   return lines.join("\n");

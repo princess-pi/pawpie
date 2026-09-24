@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildListResult } from "../src/list.ts";
+import { buildListResult, renderListText } from "../src/list.ts";
 import { makeTempRepo, writeAdrFile, writeSidecar } from "./support.ts";
 
 const ADR_DATE_SHAPE_1 = `# 0001. Use bun for the toolchain
@@ -133,6 +133,34 @@ describe("pawpie list", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.adrs[0].problemWarning).toBe(false);
+  });
+
+  test("renderListText strips terminal control characters from a title", () => {
+    const repo = makeTempRepo();
+    // \x1b (ESC) is what starts an ANSI/OSC escape sequence — e.g. OSC 52
+    // can write the invoking terminal's clipboard. Titles come from file
+    // content, so this is untrusted-ish input reaching a terminal.
+    writeAdrFile(
+      repo,
+      "0001-injected.md",
+      "# 0001. Injected\x1b]52;c;ZXZpbA==\x07 title\n\n- **Date:** 2026-01-01\n\n## Problem\n\nx\n",
+    );
+
+    const text = renderListText(buildListResult(repo));
+
+    expect(text).not.toContain("\x1b");
+    expect(text).not.toContain("\x07");
+  });
+
+  test("renderListText strips terminal control characters from an unvalidated sidecar date", () => {
+    const repo = makeTempRepo();
+    writeAdrFile(repo, "0001-a.md", ADR_DATE_SHAPE_1);
+    writeSidecar(repo, ["0001\t2026-01-01\x1b]52;c;ZXZpbA==\x07\tclear\tnote"]);
+
+    const text = renderListText(buildListResult(repo));
+
+    expect(text).not.toContain("\x1b");
+    expect(text).not.toContain("\x07");
   });
 
   test("order: never-checked sorts above checked, older check sorts above newer", () => {
