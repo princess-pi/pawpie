@@ -8,6 +8,12 @@ export interface AdrError {
   message: string;
 }
 
+export interface Claim {
+  disposition: "taken" | "not-taken";
+  text: string;
+  source: string;
+}
+
 export interface AdrRecord {
   id: string;
   number: number;
@@ -15,6 +21,8 @@ export interface AdrRecord {
   title: string | null;
   date: string | null;
   problemWarning: boolean;
+  claims: Claim[];
+  claimsMissing: boolean;
   error: AdrError | null;
 }
 
@@ -71,6 +79,34 @@ export function extractProblemSection(content: string): string | null {
 export const UNFILLED_PROBLEM_PLACEHOLDER =
   "<the query you would type into a search two years later — state the problem without naming the option you chose>";
 
+export function extractClaimsSection(content: string): string | null {
+  const m = content.match(/^##\s+Claims\s*$/m);
+  if (!m || m.index === undefined) return null;
+  const rest = content.slice(m.index + m[0].length);
+  const next = rest.match(/^##\s+/m);
+  return (next && next.index !== undefined ? rest.slice(0, next.index) : rest).trim();
+}
+
+export const UNFILLED_CLAIMS_PLACEHOLDER =
+  "- [taken|not-taken] <one claim researched for this decision, in one line> — <its source>";
+
+// The separator is an em or en dash only, never a plain hyphen — a claim's
+// own text (e.g. "re-copies") routinely contains hyphens, and a plain-hyphen
+// separator would split on the wrong one.
+const CLAIM_LINE = /^-\s*\[(taken|not-taken)\]\s*(.+?)\s[—–]\s(\S.*)$/;
+
+// Lenient the way sidecar.ts's line reader is: a line that doesn't match the
+// shape is skipped rather than refusing the whole scan over one typo.
+export function parseClaims(claimsText: string): Claim[] {
+  const claims: Claim[] = [];
+  for (const line of claimsText.split("\n")) {
+    const m = line.trim().match(CLAIM_LINE);
+    if (!m) continue;
+    claims.push({ disposition: m[1] as "taken" | "not-taken", text: m[2].trim(), source: m[3].trim() });
+  }
+  return claims;
+}
+
 const STOPWORDS = new Set([
   "this", "that", "with", "from", "into", "your", "have", "will",
   "does", "each", "when", "what", "which", "should", "would",
@@ -119,6 +155,8 @@ export function scanAdrDir(adrDir: string): ScanResult {
         title: null,
         date: null,
         problemWarning: false,
+        claims: [],
+        claimsMissing: true,
         error: { kind: "unreadable", message: `${file}: could not be read: ${(err as Error).message}` },
       });
       continue;
@@ -128,6 +166,8 @@ export function scanAdrDir(adrDir: string): ScanResult {
     const problemText = extractProblemSection(content);
     const date = extractDate(content);
     const problemIsUnfilled = problemText !== null && problemText.trim().length === 0;
+    const claimsText = extractClaimsSection(content);
+    const claims = claimsText === null ? [] : parseClaims(claimsText);
 
     let error: AdrError | null = null;
     if (problemText === null) {
@@ -149,6 +189,8 @@ export function scanAdrDir(adrDir: string): ScanResult {
         title !== null &&
         problemText !== UNFILLED_PROBLEM_PLACEHOLDER &&
         problemNamesChosenOption(title, problemText),
+      claims,
+      claimsMissing: claims.length === 0,
       error,
     });
   }

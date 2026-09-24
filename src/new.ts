@@ -1,6 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { UNFILLED_PROBLEM_PLACEHOLDER, hasDuplicateNumbers, nextFreeNumber } from "./adr.ts";
+import {
+  UNFILLED_CLAIMS_PLACEHOLDER,
+  UNFILLED_PROBLEM_PLACEHOLDER,
+  hasDuplicateNumbers,
+  nextFreeNumber,
+} from "./adr.ts";
 
 export interface NewAdrError {
   kind: "duplicate-number" | "invalid-title";
@@ -61,6 +66,10 @@ ${UNFILLED_PROBLEM_PLACEHOLDER}
 ## Decision
 
 ## Consequences
+
+## Claims
+
+${UNFILLED_CLAIMS_PLACEHOLDER}
 `;
 
   fs.writeFileSync(path.join(adrDir, file), content, { encoding: "utf8", flag: "wx" });

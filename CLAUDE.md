@@ -27,11 +27,12 @@ there about as often as you commit.
   since a published package ships prebuilt output and never requires bun at the consumer end. This
   includes `recheck`/`punch`'s judge and MCP-server wiring: no MCP SDK dependency, hand-rolled
   JSON-RPC over stdio in `src/mcp-server.ts` instead.
-- **`recheck`/`punch` never edits an ADR and never re-decides.** It raises with evidence (a URL and
-  a quote) or stays quiet, and appends exactly one line to `docs/adr/recheck.tsv` per run. Tests
-  must never call the real EXA search backend or the real judge model — use `PAWPIE_SEARCH_ADAPTER=
-  fixture` / `PAWPIE_SEARCH_FIXTURE` and a fake `PAWPIE_JUDGE_CMD` (see `tests/support.ts`'s
-  `fakeJudgeEnv`).
+- **`recheck`/`punch` never edits an ADR and never re-decides.** It runs two passes (pass 1 iterates
+  the `## Claims`, pass 2 asks four questions about `## Problem`), raises with evidence (a source
+  and a quote) or stays quiet, and appends exactly one line to `docs/adr/recheck.tsv` per run.
+  Tests must never call the real EXA search backend or the real judge model — use
+  `PAWPIE_SEARCH_ADAPTER=fixture` / `PAWPIE_SEARCH_FIXTURE` and a fake `PAWPIE_JUDGE_CMD` (see
+  `tests/support.ts`'s `fakeJudgeEnv`).
 
 ## Stack
 
@@ -55,7 +56,8 @@ there about as often as you commit.
 ## Shape
 
 - `src/cli.ts` — argument parsing and command dispatch; exports `run()` for tests.
-- `src/adr.ts` — scans `docs/adr/`, parses dates in the three known shapes, detects a missing
+- `src/adr.ts` — scans `docs/adr/`, parses dates in the three known shapes and the `## Claims`
+  section (one line per claim, tagged `taken`/`not-taken` with its source), detects a missing
   `## Problem`, a missing date, and duplicate ADR numbers.
 - `src/sidecar.ts` — reads `docs/adr/recheck.tsv` (nothing writes it yet).
 - `src/list.ts` — `pawpie list`: builds and sorts the `pawpie-list@1` record.

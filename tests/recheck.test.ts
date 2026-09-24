@@ -4,27 +4,71 @@ import * as path from "node:path";
 import { refuseMissingId, runRecheck } from "../src/recheck.ts";
 import { adrDirOf, fakeJudgeEnv, makeTempRepo, writeAdrFile } from "./support.ts";
 
-const CLEAR_VERDICT = { outcome: "clear", raises: [] };
+const CLEAR_VERDICT = { outcome: "clear", raises: [], extractedClaims: [], unchecked: [] };
 
-function raisedVerdict(trigger: string) {
+function pass1Raise(disposition: "taken" | "not-taken") {
   return {
     outcome: "raised",
     raises: [
       {
-        trigger,
-        note: `${trigger} found`,
-        evidence: { url: "https://example.com/evidence", quote: "this changed" },
+        pass: 1,
+        claim: { text: "bun hardlinks packages from a global cache", disposition },
+        note: `${disposition} claim no longer holds`,
+        evidence: { source: "https://example.com/evidence", quote: "this changed" },
       },
     ],
+    extractedClaims: [],
+    unchecked: [],
   };
 }
 
-function seedAdr(repo: string): void {
-  writeAdrFile(
-    repo,
-    "0001-use-bun.md",
-    "# 0001. Use bun for the toolchain\n\n- **Date:** 2026-01-01\n\n## Problem\n\nwhich javascript package manager and bundler to standardize on\n\n## Decision\n",
-  );
+function pass2Raise(question: string) {
+  return {
+    outcome: "raised",
+    raises: [
+      {
+        pass: 2,
+        question,
+        note: `${question} found`,
+        evidence: { source: "https://example.com/evidence", quote: "this changed" },
+      },
+    ],
+    extractedClaims: [],
+    unchecked: [],
+  };
+}
+
+const ADR_WITH_CLAIMS = `# 0001. Use bun for the toolchain
+
+- **Date:** 2026-01-01
+
+## Problem
+
+which javascript package manager and bundler to standardize on
+
+## Decision
+
+## Claims
+
+- [taken] bun hardlinks packages from a global cache — https://bun.sh/docs/install/cache
+- [not-taken] npm re-copies every package on every install — https://docs.npmjs.com/cli/v10/commands/npm-install
+`;
+
+const ADR_PROSE_ONLY = `# 0001. Use bun for the toolchain
+
+- **Date:** 2026-01-01
+
+## Problem
+
+which javascript package manager and bundler to standardize on
+
+## Decision
+
+Chose bun because it hardlinks from a shared cache, which npm does not.
+`;
+
+function seedAdr(repo: string, content: string = ADR_WITH_CLAIMS): void {
+  writeAdrFile(repo, "0001-use-bun.md", content);
 }
 
 describe("pawpie recheck/punch — refusals", () => {
@@ -85,7 +129,27 @@ describe("pawpie recheck/punch — refusals", () => {
   test("a judge verdict missing evidence on a raise is judge-failed rather than silently accepted", () => {
     const repo = makeTempRepo();
     seedAdr(repo);
-    const badVerdict = { outcome: "raised", raises: [{ trigger: "new-option", note: "x" }] };
+    const badVerdict = {
+      outcome: "raised",
+      raises: [{ pass: 1, claim: { text: "x", disposition: "taken" }, note: "x" }],
+      extractedClaims: [],
+      unchecked: [],
+    };
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(badVerdict) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
+  });
+
+  test("a pass-1 raise missing its claim is judge-failed rather than silently accepted", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const badVerdict = {
+      outcome: "raised",
+      raises: [{ pass: 1, note: "x", evidence: { source: "https://a", quote: "q" } }],
+      extractedClaims: [],
+      unchecked: [],
+    };
     const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(badVerdict) });
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -93,21 +157,42 @@ describe("pawpie recheck/punch — refusals", () => {
   });
 });
 
-describe("pawpie recheck/punch — the three triggers, each watched failing on fixtures", () => {
-  for (const trigger of ["new-option", "driver-moved", "reason-no-longer-holds"] as const) {
-    test(`a canned "${trigger}" result raises with that trigger and its evidence`, () => {
+describe("pawpie recheck/punch — pass 1 (the recorded claims)", () => {
+  for (const disposition of ["taken", "not-taken"] as const) {
+    test(`a canned pass-1 raise on a "${disposition}" claim carries its disposition and evidence`, () => {
       const repo = makeTempRepo();
       seedAdr(repo);
-      const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(raisedVerdict(trigger)) });
+      const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(pass1Raise(disposition)) });
 
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.outcome).toBe("raised");
       expect(result.exitCode).toBe(10);
       expect(result.raises).toHaveLength(1);
-      expect(result.raises[0].trigger).toBe(trigger);
-      expect(result.raises[0].evidence.url).toBe("https://example.com/evidence");
-      expect(result.raises[0].evidence.quote).toBe("this changed");
+      const raise = result.raises[0];
+      expect(raise.pass).toBe(1);
+      if (raise.pass !== 1) return;
+      expect(raise.claim.disposition).toBe(disposition);
+      expect(raise.evidence.source).toBe("https://example.com/evidence");
+      expect(raise.evidence.quote).toBe("this changed");
+    });
+  }
+});
+
+describe("pawpie recheck/punch — pass 2 (the four questions)", () => {
+  for (const question of ["new-options", "changed-capabilities", "new-make-abilities", "changed-spec"] as const) {
+    test(`a canned "${question}" result raises with that question and its evidence`, () => {
+      const repo = makeTempRepo();
+      seedAdr(repo);
+      const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(pass2Raise(question)) });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.outcome).toBe("raised");
+      const raise = result.raises[0];
+      expect(raise.pass).toBe(2);
+      if (raise.pass !== 2) return;
+      expect(raise.question).toBe(question);
     });
   }
 
@@ -121,6 +206,50 @@ describe("pawpie recheck/punch — the three triggers, each watched failing on f
     expect(result.outcome).toBe("clear");
     expect(result.exitCode).toBe(0);
     expect(result.raises).toHaveLength(0);
+  });
+
+  test("reports pass-2 questions the judge could not check, never folded into 'clear'", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const verdict = { ...CLEAR_VERDICT, unchecked: ["new-make-abilities", "changed-spec"] };
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(verdict) });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.outcome).toBe("clear");
+    expect(result.unchecked).toEqual(["new-make-abilities", "changed-spec"]);
+  });
+});
+
+describe("pawpie recheck/punch — claims: recorded vs. extracted", () => {
+  test("a prose-only ADR (no usable ## Claims) has its claims extracted by the judge, reported in --json, and the ADR is never edited", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo, ADR_PROSE_ONLY);
+    const adrPath = path.join(adrDirOf(repo), "0001-use-bun.md");
+    const before = fs.readFileSync(adrPath, "utf8");
+
+    const verdict = {
+      outcome: "clear",
+      raises: [],
+      extractedClaims: [{ text: "bun hardlinks from a shared cache", disposition: "taken" }],
+      unchecked: [],
+    };
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(verdict) });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.extractedClaims).toHaveLength(1);
+    expect(result.extractedClaims[0].disposition).toBe("taken");
+    expect(fs.readFileSync(adrPath, "utf8")).toBe(before);
+  });
+
+  test("an ADR with a usable ## Claims section reports no extractedClaims", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(CLEAR_VERDICT) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.extractedClaims).toHaveLength(0);
   });
 });
 
@@ -145,22 +274,24 @@ describe("pawpie recheck/punch — the sidecar", () => {
     expect(outcome).toBe("clear");
   });
 
-  test("a raise's sidecar note folds every raise's note onto the one line", () => {
+  test("a raise's sidecar note tags each raise with its pass, and folds multiple raises onto one line", () => {
     const repo = makeTempRepo();
     seedAdr(repo);
     const verdict = {
       outcome: "raised",
       raises: [
-        { trigger: "new-option", note: "found X", evidence: { url: "https://a", quote: "q1" } },
-        { trigger: "driver-moved", note: "price dropped", evidence: { url: "https://b", quote: "q2" } },
+        { pass: 1, claim: { text: "x", disposition: "taken" }, note: "found X", evidence: { source: "https://a", quote: "q1" } },
+        { pass: 2, question: "changed-capabilities", note: "price dropped", evidence: { source: "https://b", quote: "q2" } },
       ],
+      extractedClaims: [],
+      unchecked: [],
     };
     runRecheck(repo, "0001", { env: fakeJudgeEnv(verdict) });
 
     const row = fs.readFileSync(path.join(adrDirOf(repo), "recheck.tsv"), "utf8").trim();
     const [, , outcome, note] = row.split("\t");
     expect(outcome).toBe("raised");
-    expect(note).toBe("found X; price dropped");
+    expect(note).toBe("pass1:taken found X; pass2:changed-capabilities price dropped");
   });
 
   test("reports usage counts even when they are zero (a fake judge that calls no tools)", () => {

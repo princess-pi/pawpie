@@ -224,8 +224,12 @@ function runRecheckCommand(
   else {
     stdout(`${result.id}: raised`);
     for (const raise of result.raises) {
-      stdout(`  [${raise.trigger}] ${raise.note}`);
-      stdout(`    ${raise.evidence.url} — "${raise.evidence.quote}"`);
+      const label = raise.pass === 1 ? `pass 1, ${raise.claim.disposition} claim` : `pass 2, ${raise.question}`;
+      stdout(`  [${label}] ${raise.note}`);
+      stdout(`    ${raise.evidence.source} — "${raise.evidence.quote}"`);
+    }
+    if (result.unchecked.length > 0) {
+      stdout(`  unchecked: ${result.unchecked.join(", ")} (missing repo/agent context)`);
     }
   }
   return result.exitCode;

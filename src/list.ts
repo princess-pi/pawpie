@@ -10,6 +10,7 @@ export interface ListedAdr {
   date: string | null;
   lastCheck: { date: string; outcome: string; note: string } | null;
   problemWarning: boolean;
+  claimsWarning: boolean;
   error: { kind: string; message: string } | null;
 }
 
@@ -65,6 +66,7 @@ export function buildListResult(repoPath: string): ListResult {
       date: adr.date,
       lastCheck: check ? { date: check.date, outcome: check.outcome, note: check.note } : null,
       problemWarning: adr.problemWarning,
+      claimsWarning: adr.claimsMissing,
       error: adr.error,
     };
   });
@@ -124,6 +126,9 @@ export function renderListText(result: ListResult): string {
     lines.push(`${adr.id}  ${title}  [${adr.date ?? "no date"}]  ${check}`);
     if (adr.problemWarning) {
       lines.push(`  warning: ## Problem may name the chosen option (${result.problemWarningCaveat})`);
+    }
+    if (adr.claimsWarning) {
+      lines.push("  warning: no ## Claims section (or none of its lines parse) — punch will extract its own");
     }
     if (adr.error) {
       lines.push(`  error: ${sanitizeForTerminal(adr.error.message)}`);

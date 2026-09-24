@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { scanAdrDir } from "./adr.ts";
-import { JudgeError, runJudge, type JudgeUsage, type Raise } from "./judge.ts";
+import { extractClaimsSection, parseClaims, scanAdrDir, type Claim } from "./adr.ts";
+import { JudgeError, runJudge, type ClaimRef, type JudgeUsage, type Pass2Context, type Question, type Raise } from "./judge.ts";
 import { createExaAdapter, createFixtureAdapter, loadFixtureAdapter } from "./search-adapter.ts";
 import type { SearchAdapter } from "./search-adapter.ts";
 import { ReadFailure } from "./errors.ts";
@@ -21,6 +21,8 @@ export interface RecheckResult {
   id: string;
   outcome: "raised" | "clear";
   raises: Raise[];
+  extractedClaims: ClaimRef[];
+  unchecked: Question[];
   usage: JudgeUsage;
   exitCode: 0 | 10;
 }
@@ -53,7 +55,53 @@ function appendSidecarLine(adrDir: string, id: string, outcome: "raised" | "clea
 
 function noteFor(raises: Raise[]): string {
   if (raises.length === 0) return "clear";
-  return raises.map((r) => r.note).join("; ");
+  return raises
+    .map((r) => `${r.pass === 1 ? `pass1:${r.claim.disposition}` : `pass2:${r.question}`} ${r.note}`)
+    .join("; ");
+}
+
+// null means "no usable ## Claims section" — judge.ts reads that as an
+// instruction to extract the claims itself rather than iterate an empty list.
+function claimsFor(adrContent: string): Claim[] | null {
+  const text = extractClaimsSection(adrContent);
+  if (text === null) return null;
+  const claims = parseClaims(text);
+  return claims.length === 0 ? null : claims;
+}
+
+// Pass 2's "changed-spec" and "new-make-abilities" questions need context the
+// web cannot answer. Both are best-effort and explicitly opt-in for the repo
+// lookup (never attempted in a test, and never silently attempted against a
+// directory that isn't actually a GitHub-backed repo): missing input is
+// reported to the judge as UNAVAILABLE, per the issue's own instruction that
+// this must read "unchecked", never "no change".
+function gatherPass2Context(repoPath: string, env: NodeJS.ProcessEnv): Pass2Context {
+  let readme: string | null = null;
+  try {
+    readme = fs.readFileSync(path.join(repoPath, "README.md"), "utf8");
+  } catch {
+    readme = null;
+  }
+
+  let openIssues: string | null = null;
+  if (env.PAWPIE_PASS2_ISSUES_FIXTURE) {
+    try {
+      openIssues = fs.readFileSync(env.PAWPIE_PASS2_ISSUES_FIXTURE, "utf8");
+    } catch {
+      openIssues = null;
+    }
+  }
+
+  let agentCapabilities: string | null = null;
+  if (env.PAWPIE_AGENT_CAPABILITIES) {
+    try {
+      agentCapabilities = fs.readFileSync(env.PAWPIE_AGENT_CAPABILITIES, "utf8");
+    } catch {
+      agentCapabilities = null;
+    }
+  }
+
+  return { readme, openIssues, agentCapabilities };
 }
 
 // Chooses which search backend the spawned MCP server child should use, by
@@ -132,6 +180,8 @@ export function runRecheck(
       env,
       selfCommand: opts.selfCommand,
       searchAdapterEnv: searchAdapterEnv(env),
+      claims: claimsFor(adrContent),
+      pass2: gatherPass2Context(repoPath, env),
     });
   } catch (err) {
     const message = err instanceof JudgeError ? err.message : `judge invocation failed: ${(err as Error).message}`;
@@ -157,6 +207,8 @@ export function runRecheck(
     id,
     outcome: judged.verdict.outcome,
     raises: judged.verdict.raises,
+    extractedClaims: judged.verdict.extractedClaims,
+    unchecked: judged.verdict.unchecked,
     usage: judged.usage,
     exitCode: judged.verdict.outcome === "raised" ? 10 : 0,
   };

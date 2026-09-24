@@ -55,20 +55,42 @@ argument, is a usage error (exit 2) rather than being read as a positional argum
 
 ## How `recheck`/`punch` works
 
-1. Read the ADR's `## Problem` — the query is the problem, never the option the ADR already chose.
-2. Hand it to a judge model, along with a small search interface exposed as two tools (`search`,
-   `fetch_url`), and let the judge drive its own research: vendor/official sources first, then free
-   APIs, then a broader web search. **There is no cost cap** — the judge decides how much research
-   a decision needs, the same way the original decision was researched.
-3. The judge raises on exactly three triggers, and never on anything else:
-   - **a new option** the ADR does not record;
-   - **a driver's answer moved** (price, availability, a supply shock, an EOL/PCN notice, a
-     competitor shipping a feature);
-   - **a recorded alternative's reason for being set aside no longer holds**.
-4. Every raise carries evidence — a URL and a direct quote — and never a recommendation:
-   `recheck`/`punch` never re-decides.
-5. Exactly one line is appended to `docs/adr/recheck.tsv`, whether the outcome is `raised` or
-   `clear`. The ADR file itself is never touched.
+A decision record carries the date it was made, the original question (`## Problem`), the
+decision, and the claims behind it (`## Claims`) — every claim researched, for the road taken and
+for every road not taken. A punch runs **two passes** against that record, handing the judge a
+small search interface (`search`, `fetch_url`) and letting it drive its own research —
+vendor/official sources first, then free APIs, then a broader web search. **There is no cost cap**
+— the judge decides how much research a decision needs, the same way the original decision was
+researched.
+
+**Pass 1 — iterate the claims.** For each recorded claim, check whether it still holds or has
+changed since the ADR's date. This covers the road taken and every road not taken alike — a
+road-not-taken claim ("X was rejected because of Y") raises just as much as a road-taken one does.
+When an ADR carries no usable `## Claims` section (a prose-only ADR), the judge extracts the claims
+itself from the prose and reports them under `extractedClaims` in `--json` — it never writes them
+back into the ADR.
+
+**Pass 2 — go back to the original question**, independent of the claim list. It asks exactly four
+questions about `## Problem`:
+
+1. **new options to buy** — has anything appeared since the ADR's date that it does not record?
+2. **changed capabilities** — has any tool or option gained or lost a relevant ability?
+3. **new abilities to make** — given today's agent skills and tools, can something now be *made*
+   that had to be bought, or bought that had to be built, differently than when the ADR was
+   researched?
+4. **changed spec** — has our own requirement moved, so the original question should be asked
+   differently? Judged against this repo's current README and open issues, never from general
+   knowledge.
+
+Either pass can raise. **Every raise names its pass**, plus either the claim (pass 1) or which of
+the four questions (pass 2), and carries evidence — a source (a URL, or a repo artifact such as
+`README.md` or `issue #12`) and a direct quote — and never a recommendation: `recheck`/`punch`
+never re-decides. Questions 3 and 4 need input the web cannot supply (this repo's own state, and
+the host's agent capabilities); when that input is unavailable, the affected question is reported
+as **`unchecked`**, never folded into "no change".
+
+Exactly one line is appended to `docs/adr/recheck.tsv` per run, whether the outcome is `raised` or
+`clear`. The ADR file itself is never touched.
 
 **Search backend:** EXA, read from `EXA_API_KEY` in the environment — never from a file in this
 repo. **Judge:** a harness CLI shelled out to in print mode, default
@@ -85,8 +107,9 @@ actually used (`usage.searches`, `usage.fetches`, `usage.judgeCalls`) — it nev
   `0002`, unless `recheck.tsv` still has a line for `0002`, in which case that number stays
   excluded too (so a new decision never inherits an old one's recheck history) and `new` writes
   the next number after that instead.
-- **The written template** has `## Problem` and a `- **Date:**` line, plus empty `## Decision` and
-  `## Consequences` headings and a `- **Status:** proposed` line.
+- **The written template** has `## Problem` and a `- **Date:**` line, plus empty `## Decision`
+  and `## Consequences` headings, a `- **Status:** proposed` line, and a `## Claims` section with
+  a placeholder line that doesn't parse as a claim (so a fresh ADR still warns until it's filled in).
 - **Scanning `docs/adr/` is flat, not recursive.** An ADR in a subdirectory is invisible to both
   `list` and `new`'s numbering.
 - **`accepted` is matched case-sensitively** in the `**Status:** accepted …` date shapes below —
@@ -130,6 +153,12 @@ actually used (`usage.searches`, `usage.fetches`, `usage.judgeCalls`) — it nev
 - **`__mcp-serve` is an undocumented, internal subcommand** — the MCP search server `recheck`/
   `punch` spawns as a child of the judge process, over its own stdio. It is never meant to be run
   by a human and carries no stability guarantee across versions.
+- **Pass 2's repo context is v0-minimal.** The README comes straight from `<path>/README.md`; open
+  issues have no live lookup yet — set `PAWPIE_PASS2_ISSUES_FIXTURE` to a file's path to supply
+  them, otherwise question 4 (`changed-spec`) is reported `unchecked` whenever the judge cannot
+  answer it from the README alone. Agent capabilities are read the same way, from
+  `PAWPIE_AGENT_CAPABILITIES` — with neither set, question 3 (`new-make-abilities`) is `unchecked`
+  by default.
 
 ## The one writing rule
 
@@ -146,6 +175,25 @@ common case and not every case, in either direction.
 break out of the generated file's `# <id>. <title>` heading line and let the rest of the title
 inject its own `## Problem`/`## Decision` markdown, read back as real content.
 
+## The `## Claims` section
+
+One line per claim researched for the decision, each tagged `taken` or `not-taken` with its
+source, separated from the claim text by an em or en dash (never a plain hyphen — a claim's own
+text routinely contains one, e.g. "re-copies"):
+
+```
+## Claims
+
+- [taken] bun hardlinks packages from a global cache — https://bun.sh/docs/install/cache
+- [not-taken] npm re-copies every package on install — https://docs.npmjs.com/cli/v10/commands/npm-install
+```
+
+`new` writes the section with a placeholder line; `list` warns (`claimsWarning`, never an error —
+it never affects the exit code) when the section is missing, or present but none of its lines
+parse. A line that doesn't match the shape is skipped, the same way a malformed `recheck.tsv` line
+is — not refused. For an ADR with no usable `## Claims`, `punch` has the judge extract the claims
+itself from the ADR's prose instead of refusing.
+
 ## Recheck sidecar
 
 `docs/adr/recheck.tsv`, committed, one line per check, because an accepted ADR is immutable:
@@ -157,8 +205,9 @@ inject its own `## Problem`/`## Decision` markdown, read back as real content.
 `list` reads it to show the last check per ADR; `recheck`/`punch` is what writes it, one line per
 run. Reading it tolerates a leading UTF-8 BOM and both `\n` and `\r\n` line endings. Two lines for
 the same ADR on the same date: the later line in the file wins. When a run raises more than one
-trigger, every raise's note is folded onto that one line, joined with `; ` — the full evidence
-(URL and quote) for each raise is only in the `--json` record, not the sidecar row.
+claim/question, every raise's note is folded onto that one line, tagged with its pass
+(`pass1:taken`, `pass1:not-taken`, or `pass2:<question>`) and joined with `; ` — the full evidence
+(source and quote) for each raise is only in the `--json` record, not the sidecar row.
 
 ## Known input shapes
 
@@ -182,16 +231,19 @@ guarantee.
 `pawpie-list@1` covers two structurally different shapes, told apart by `ok`:
 
 - **`ok: true`** (a scan ran, whether or not any ADR raised) — `path`, `scanned`, `adrs[]` (each
-  with `id`, `file`, `title`, `date`, `lastCheck` or `null`, `problemWarning`, `error` or `null`
-  with an `error.kind` of `no-problem` / `no-date` / `unreadable` / `duplicate-number`),
-  `problemWarningCaveat`, `exitCode` (0 or 3).
+  with `id`, `file`, `title`, `date`, `lastCheck` or `null`, `problemWarning`, `claimsWarning`,
+  `error` or `null` with an `error.kind` of `no-problem` / `no-date` / `unreadable` /
+  `duplicate-number`), `problemWarningCaveat`, `exitCode` (0 or 3).
 - **`ok: false`** — `path`, `message`, `exitCode` (always 2), `reason` of `no-adr-directory` /
   `unreadable` / `usage-error`.
 
 `pawpie-recheck@1` covers two shapes, told apart by `ok`:
 
-- **`ok: true`** — `id`, `outcome` (`clear` or `raised`), `raises[]` (each with `trigger` of
-  `new-option` / `driver-moved` / `reason-no-longer-holds`, `note`, `evidence: {url, quote}`),
+- **`ok: true`** — `id`, `outcome` (`clear` or `raised`), `raises[]` (each with `pass` of `1` or
+  `2`; a pass-1 raise carries `claim: {text, disposition}`, a pass-2 raise carries `question` of
+  `new-options` / `changed-capabilities` / `new-make-abilities` / `changed-spec`; both carry `note`
+  and `evidence: {source, quote}`), `extractedClaims[]` (each `{text, disposition}`, populated only
+  when the ADR carried no usable `## Claims`), `unchecked[]` (question ids pass 2 could not check),
   `usage: {searches, fetches, judgeCalls}`, `exitCode` (0 clear, 10 raised).
 - **`ok: false`** — `id` (`null` when none was given), `message`, `exitCode` (2 or 1), and `reason`
   of `missing-id` / `usage-error` / `adr-not-found` / `adr-invalid` (exit 2), or `judge-failed` /

@@ -135,6 +135,30 @@ describe("pawpie list", () => {
     expect(result.adrs[0].problemWarning).toBe(false);
   });
 
+  test("claimsWarning is true with no ## Claims section, false with a populated one", () => {
+    const repo = makeTempRepo();
+    writeAdrFile(repo, "0001-no-claims.md", ADR_DATE_SHAPE_1);
+    writeAdrFile(
+      repo,
+      "0002-with-claims.md",
+      ADR_DATE_SHAPE_2 + "\n## Claims\n\n- [taken] a claim — https://a\n",
+    );
+
+    const result = buildListResult(repo);
+    const byId = Object.fromEntries(result.adrs.map((a) => [a.id, a]));
+    expect(byId["0001"].claimsWarning).toBe(true);
+    expect(byId["0002"].claimsWarning).toBe(false);
+  });
+
+  test("renderListText warns when ## Claims is missing", () => {
+    const repo = makeTempRepo();
+    writeAdrFile(repo, "0001-a.md", ADR_DATE_SHAPE_1);
+
+    const text = renderListText(buildListResult(repo));
+
+    expect(text).toContain("no ## Claims section");
+  });
+
   test("renderListText strips terminal control characters from a title", () => {
     const repo = makeTempRepo();
     // \x1b (ESC) is what starts an ANSI/OSC escape sequence — e.g. OSC 52
