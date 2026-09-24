@@ -53,6 +53,6 @@ ${UNFILLED_PROBLEM_PLACEHOLDER}
 ## Consequences
 `;
 
-  fs.writeFileSync(path.join(adrDir, file), content, "utf8");
+  fs.writeFileSync(path.join(adrDir, file), content, { encoding: "utf8", flag: "wx" });
   return { ok: true, file, id };
 }

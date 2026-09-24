@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { scanAdrDir, type AdrRecord } from "./adr.ts";
+import { ReadFailure } from "./errors.ts";
 import { readSidecar, lastCheckByAdr, type CheckEntry } from "./sidecar.ts";
 
 export interface ListedAdr {
@@ -22,21 +23,14 @@ export interface ListResult {
 }
 
 // Never-checked ADRs sort above checked ones; among checked ones, an older
-// check sorts above a newer one. Ties break by ADR id.
+// check sorts above a newer one. Ties break by the numeric ADR id (so id
+// 10000 does not sort before 9999).
 function compareListed(a: ListedAdr, b: ListedAdr): number {
-  if (!a.lastCheck && !b.lastCheck) return a.id.localeCompare(b.id);
+  if (!a.lastCheck && !b.lastCheck) return Number(a.id) - Number(b.id);
   if (!a.lastCheck) return -1;
   if (!b.lastCheck) return 1;
   if (a.lastCheck.date !== b.lastCheck.date) return a.lastCheck.date.localeCompare(b.lastCheck.date);
-  return a.id.localeCompare(b.id);
-}
-
-// Names which path a read failure came from, so a caller can report the
-// actual offending file instead of always blaming the ADR directory.
-export class ListReadFailure extends Error {
-  constructor(public readonly failedPath: string, cause: unknown) {
-    super(`could not read ${failedPath}: ${(cause as Error).message}`);
-  }
+  return Number(a.id) - Number(b.id);
 }
 
 export function buildListResult(repoPath: string): ListResult {
@@ -48,14 +42,14 @@ export function buildListResult(repoPath: string): ListResult {
   try {
     ({ adrs, scanned } = scanAdrDir(adrDir));
   } catch (err) {
-    throw new ListReadFailure(adrDir, err);
+    throw new ReadFailure(adrDir, err);
   }
 
   let lastChecks: Map<string, CheckEntry>;
   try {
     lastChecks = lastCheckByAdr(readSidecar(sidecarPath));
   } catch (err) {
-    throw new ListReadFailure(sidecarPath, err);
+    throw new ReadFailure(sidecarPath, err);
   }
 
   const listed: ListedAdr[] = adrs.map((adr: AdrRecord) => {

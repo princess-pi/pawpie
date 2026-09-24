@@ -20,6 +20,30 @@ describe("pawpie cli", () => {
     expect(code).toBe(2);
   });
 
+  test("an unknown command with --json still emits a JSON record on stdout", () => {
+    const c = captured();
+    const code = run(["frobnicate", "--json"], c.stdout, c.stderr);
+    expect(code).toBe(2);
+    const doc = JSON.parse(c.out[0]);
+    expect(doc.schema).toBe("pawpie@1");
+    expect(doc.ok).toBe(false);
+    expect(doc.reason).toBe("usage-error");
+  });
+
+  test("an unexpected extra argument is a usage error, exit 2, for list/new/recheck", () => {
+    const repo = makeTempRepo();
+    writeAdrFile(repo, "0001-a.md", "# 0001. A\n\n- **Date:** 2026-01-01\n\n## Problem\n\nx\n");
+
+    for (const args of [
+      ["list", repo, "extra"],
+      ["new", "title", repo, "extra"],
+      ["recheck", "0001", repo, "extra"],
+    ]) {
+      const c = captured();
+      expect(run(args, c.stdout, c.stderr)).toBe(2);
+    }
+  });
+
   test("list with no ADR directory is a usage error, exit 2", () => {
     const repo = makeTempRepo();
     const c = captured();
@@ -103,6 +127,23 @@ describe("pawpie cli", () => {
     expect(doc.message).toContain("recheck.tsv");
   });
 
+  test("an inaccessible parent directory is 'unreadable', not 'no ADR directory'", () => {
+    if (process.getuid && process.getuid() === 0) return; // root bypasses permission bits
+    const repo = makeTempRepo();
+    writeAdrFile(repo, "0001-a.md", "# 0001. A\n\n- **Date:** 2026-01-01\n\n## Problem\n\nx\n");
+    const docsDir = path.join(repo, "docs");
+    fs.chmodSync(docsDir, 0o000);
+
+    const c = captured();
+    const code = run(["list", repo, "--json"], c.stdout, c.stderr);
+
+    fs.chmodSync(docsDir, 0o755);
+
+    expect(code).toBe(2);
+    const doc = JSON.parse(c.out[0]);
+    expect(doc.reason).toBe("unreadable");
+  });
+
   test("list --json on a populated repo exits 0", () => {
     const repo = makeTempRepo();
     writeAdrFile(repo, "0001-a.md", "# 0001. A\n\n- **Date:** 2026-01-01\n\n## Problem\n\nx\n");
@@ -164,21 +205,24 @@ describe("pawpie cli", () => {
     });
   }
 
-  test("running the built bundle through a symlink (npm's bin layout) still runs the CLI", () => {
-    const bundle = path.resolve(import.meta.dirname, "..", "bin", "pawpie.mjs");
-    if (!fs.existsSync(bundle)) return; // `bun run build` produces this; skip if not built yet
+  const bundle = path.resolve(import.meta.dirname, "..", "bin", "pawpie.mjs");
+  // `bun run build` produces this; reported as skipped (not silently passed)
+  // when the suite runs without a build having been done first.
+  test.skipIf(!fs.existsSync(bundle))(
+    "running the built bundle through a symlink (npm's bin layout) still runs the CLI",
+    () => {
+      const linkDir = fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-symlink-"));
+      const link = path.join(linkDir, "pawpie");
+      fs.symlinkSync(bundle, link);
 
-    const linkDir = fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-symlink-"));
-    const link = path.join(linkDir, "pawpie");
-    fs.symlinkSync(bundle, link);
+      // The published artifact must run on stock node (Node Toolchain
+      // Standard), and this bug is specific to Node's
+      // argv[1]-vs-import.meta.url symlink handling — `process.execPath`
+      // under `bun test` is bun itself, which does not reproduce it.
+      const result = spawnSync("node", [link, "--help"], { encoding: "utf8" });
 
-    // The published artifact must run on stock node (Node Toolchain Standard),
-    // and this bug is specific to Node's argv[1]-vs-import.meta.url symlink
-    // handling — `process.execPath` under `bun test` is bun itself, which
-    // does not reproduce it.
-    const result = spawnSync("node", [link, "--help"], { encoding: "utf8" });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("pawpie");
-  });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("pawpie");
+    },
+  );
 });

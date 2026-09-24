@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ReadFailure } from "./errors.ts";
 import { readSidecar } from "./sidecar.ts";
 
 export interface AdrError {
@@ -165,10 +166,27 @@ export function scanAdrDir(adrDir: string): ScanResult {
   return { adrs: records, scanned: records.length };
 }
 
+function scanAdrDirWrapped(adrDir: string): ScanResult {
+  try {
+    return scanAdrDir(adrDir);
+  } catch (err) {
+    throw new ReadFailure(adrDir, err);
+  }
+}
+
+function readSidecarWrapped(adrDir: string) {
+  const sidecarPath = path.join(adrDir, "recheck.tsv");
+  try {
+    return readSidecar(sidecarPath);
+  } catch (err) {
+    throw new ReadFailure(sidecarPath, err);
+  }
+}
+
 export function nextFreeNumber(adrDir: string): number {
-  const { adrs } = scanAdrDir(adrDir);
+  const { adrs } = scanAdrDirWrapped(adrDir);
   const used = new Set(adrs.map((a) => a.number));
-  for (const entry of readSidecar(path.join(adrDir, "recheck.tsv"))) {
+  for (const entry of readSidecarWrapped(adrDir)) {
     if (/^\d+$/.test(entry.adrId)) used.add(Number(entry.adrId));
   }
   let n = 1;
@@ -177,6 +195,6 @@ export function nextFreeNumber(adrDir: string): number {
 }
 
 export function hasDuplicateNumbers(adrDir: string): boolean {
-  const { adrs } = scanAdrDir(adrDir);
+  const { adrs } = scanAdrDirWrapped(adrDir);
   return adrs.some((a) => a.error?.kind === "duplicate-number");
 }

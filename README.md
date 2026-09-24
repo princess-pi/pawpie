@@ -49,13 +49,16 @@ npx --yes @princess-pi/pawpie <command>
 | `pawpie recheck <id> [path] [--json]` (alias `pawpie punch <id> [path] [--json]`) | not built yet — refuses, exit 2 | — |
 
 `path` defaults to the current directory. ADRs live under `<path>/docs/adr/`. `list` refuses when
-that directory is missing; `new` creates it. An unrecognized `--flag` is a usage error (exit 2)
-rather than being read as a positional argument.
+that directory is missing; `new` creates it. An unrecognized `--flag`, or an unexpected extra
+argument, is a usage error (exit 2) rather than being read as a positional argument.
 
 ## v0 known limits
 
-- **"Next free number" fills gaps.** It is the lowest unused ADR number, not one past the
-  highest — deleting `0002` and running `new` again reuses `0002`, it does not jump to `0004`.
+- **"Next free number" fills gaps, including gaps the sidecar still remembers.** It is the lowest
+  unused ADR number, not one past the highest — deleting `0002` and running `new` again reuses
+  `0002`, unless `recheck.tsv` still has a line for `0002`, in which case that number stays
+  excluded too (so a new decision never inherits an old one's recheck history) and `new` writes
+  the next number after that instead.
 - **The written template** has `## Problem` and a `- **Date:**` line, plus empty `## Decision` and
   `## Consequences` headings and a `- **Status:** proposed` line.
 - **Scanning `docs/adr/` is flat, not recursive.** An ADR in a subdirectory is invisible to both
@@ -77,8 +80,10 @@ rather than being read as a positional argument.
 
 An ADR needs a `## Problem` section that states the problem **without naming any of the options**:
 the query you would type into a search two years later. `list` warns when the chosen option's name
-appears inside its own `## Problem`. The check is a heuristic — it catches the common case, a title
-word reused verbatim in the Problem section, and not every case.
+appears inside its own `## Problem`. The check is a heuristic, and a narrow one: it only compares
+title words of 4+ letters (skipping a short stopword list), so a short option name — `bun`, `npm`,
+most tool names — can be reused in the Problem text and pass with no warning. It catches the common
+case and not every case.
 
 ## Recheck sidecar
 
@@ -107,7 +112,7 @@ fields, never on the exit code alone.
 |---|---|
 | 0 | ran; nothing raised (also help) |
 | 1 | sidecar unwritable (reserved for `recheck`/`punch` — not reachable until Step D) |
-| 2 | usage error: an unknown command or flag, a missing title for `new`, no ADR directory or an unreadable ADR directory/sidecar for `list`, an unwritable ADR directory for `new`, or `recheck`/`punch` (always — id or not) |
+| 2 | usage error: an unknown command, an unknown flag, an unexpected extra argument, a missing title for `new`, no ADR directory or an unreadable ADR directory/sidecar for `list`, an unwritable ADR directory for `new` (or an unreadable one, reported the same way), or `recheck`/`punch` (always — id or not) |
 | 3 | an ADR is present and checks nothing: no `## Problem`, no date in any known shape, unreadable, or a duplicate number — also returned by `new` when the directory already has a duplicate number |
 | 10 | at least one ADR raised (Step D, not built yet) |
 

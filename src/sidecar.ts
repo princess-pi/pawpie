@@ -32,7 +32,7 @@ export function readSidecar(sidecarPath: string): CheckEntry[] {
 // So a hand-written "4" or "00004" matches the "0004" id `scanAdrDir` gives
 // its files.
 function normalizeAdrId(raw: string): string {
-  return /^\d+$/.test(raw) ? raw.padStart(4, "0") : raw;
+  return /^\d+$/.test(raw) ? String(Number(raw)).padStart(4, "0") : raw;
 }
 
 export function lastCheckByAdr(entries: CheckEntry[]): Map<string, CheckEntry> {
