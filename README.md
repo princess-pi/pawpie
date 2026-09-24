@@ -41,12 +41,32 @@ node bin/pawpie.mjs <command>
 
 | Command | Does | Cost |
 |---|---|---|
-| `pawpie` | prints help, runs nothing | — |
+| `pawpie` (also `--help` / `-h`) | prints help, runs nothing | — |
 | `pawpie list [path] [--json]` | every ADR with its date and last check, oldest check first, never-checked at the top | no network, no tokens |
 | `pawpie new "<title>" [path]` | next free number, a template with `## Problem` and one date line | local |
-| `pawpie recheck <id> [path]` (alias `pawpie punch <id>`) | not built yet — refuses, exit 2 | — |
+| `pawpie recheck <id> [path] [--json]` (alias `pawpie punch <id> [path] [--json]`) | not built yet — refuses, exit 2 | — |
 
-`path` defaults to the current directory. ADRs live under `<path>/docs/adr/`.
+`path` defaults to the current directory. ADRs live under `<path>/docs/adr/`. `list` refuses when
+that directory is missing; `new` creates it. An unrecognized `--flag` is a usage error (exit 2)
+rather than being read as a positional argument.
+
+## v0 known limits
+
+- **"Next free number" fills gaps.** It is the lowest unused ADR number, not one past the
+  highest — deleting `0002` and running `new` again reuses `0002`, it does not jump to `0004`.
+- **The written template** has `## Problem` and a `- **Date:**` line, plus empty `## Decision` and
+  `## Consequences` headings and a `- **Status:** proposed` line.
+- **Scanning `docs/adr/` is flat, not recursive.** An ADR in a subdirectory is invisible to both
+  `list` and `new`'s numbering.
+- **`accepted` is matched case-sensitively** in the `**Status:** accepted …` date shapes below —
+  `Accepted` (capital A) does not match and is treated as no date found.
+- **Error precedence, when more than one applies to the same file:** a duplicate ADR number wins
+  over any content error; between a missing `## Problem` and a missing date, the missing-`##
+  Problem` error is reported.
+- **A title with no letters or digits** (e.g. `"???"`) writes `NNNN-untitled.md` rather than
+  refusing.
+- **A malformed line in `recheck.tsv`** — wrong column count, or an `outcome` outside
+  `clear`/`raised`/`skipped` — is skipped rather than refused.
 
 ## The one writing rule
 
@@ -81,9 +101,9 @@ fields, never on the exit code alone.
 | exit | meaning |
 |---|---|
 | 0 | ran; nothing raised (also help) |
-| 1 | sidecar unwritable |
-| 2 | usage error, no ADR directory, `recheck`/`punch` with no id |
-| 3 | an ADR is present and checks nothing: no `## Problem`, no date in any known shape, unreadable, or a duplicate number |
+| 1 | sidecar unwritable (reserved for `recheck`/`punch` — not reachable until Step D) |
+| 2 | usage error: an unknown command or flag, a missing title for `new`, no ADR directory for `list`, or `recheck`/`punch` (always — id or not) |
+| 3 | an ADR is present and checks nothing: no `## Problem`, no date in any known shape, unreadable, or a duplicate number — also returned by `new` when the directory already has a duplicate number |
 | 10 | at least one ADR raised (Step D, not built yet) |
 
 ---

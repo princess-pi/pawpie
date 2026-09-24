@@ -14,6 +14,7 @@ export interface ListedAdr {
 
 export interface ListResult {
   schema: "pawpie-list@1";
+  ok: true;
   path: string;
   scanned: number;
   adrs: ListedAdr[];
@@ -53,7 +54,24 @@ export function buildListResult(repoPath: string): ListResult {
 
   const exitCode = listed.some((a) => a.error !== null) ? 3 : 0;
 
-  return { schema: "pawpie-list@1", path: repoPath, scanned, adrs: listed, exitCode };
+  return { schema: "pawpie-list@1", ok: true, path: repoPath, scanned, adrs: listed, exitCode };
+}
+
+export interface ListRefusal {
+  schema: "pawpie-list@1";
+  ok: false;
+  reason: "no-adr-directory" | "unreadable";
+  path: string;
+  message: string;
+  exitCode: 2;
+}
+
+export function refuseList(
+  repoPath: string,
+  reason: ListRefusal["reason"],
+  message: string,
+): ListRefusal {
+  return { schema: "pawpie-list@1", ok: false, reason, path: repoPath, message, exitCode: 2 };
 }
 
 export function renderListText(result: ListResult): string {

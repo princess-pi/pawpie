@@ -13,8 +13,9 @@ export function readSidecar(sidecarPath: string): CheckEntry[] {
   let content: string;
   try {
     content = fs.readFileSync(sidecarPath, "utf8");
-  } catch {
-    return [];
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
   }
   const entries: CheckEntry[] = [];
   for (const line of content.split("\n")) {

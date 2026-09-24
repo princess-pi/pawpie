@@ -24,8 +24,9 @@ there about as often as you commit.
   `bun run build`.
 - **The bundle imports only `node:` builtins.** It must run on stock node (`node bin/pawpie.mjs`),
   since a published package ships prebuilt output and never requires bun at the consumer end.
-- **Step D (`recheck`/`punch`) is out of scope for v0.** Both names exist and refuse with
-  "not built yet" (exit 2) — see `src/recheck.ts`. It is specified in its own issue.
+- **Step D (`recheck`/`punch`) is out of scope for v0.** Both names exist and refuse, exit 2 —
+  "requires an ADR id" with none given, "not built yet" once one is — see `src/recheck.ts`. It is
+  specified in its own issue.
 
 ## Stack
 

@@ -19,7 +19,6 @@ export interface AdrRecord {
 export interface ScanResult {
   adrs: AdrRecord[];
   scanned: number;
-  fatalError: AdrError | null;
 }
 
 const README_NAMES = new Set(["readme.md"]);
@@ -84,8 +83,11 @@ export function scanAdrDir(adrDir: string): ScanResult {
   let entries: string[];
   try {
     entries = fs.readdirSync(adrDir).filter(isAdrFilename).sort();
-  } catch {
-    return { adrs: [], scanned: 0, fatalError: null };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { adrs: [], scanned: 0 };
+    }
+    throw err;
   }
 
   const numberToFiles = new Map<string, string[]>();
@@ -152,7 +154,7 @@ export function scanAdrDir(adrDir: string): ScanResult {
     }
   }
 
-  return { adrs: records, scanned: records.length, fatalError: null };
+  return { adrs: records, scanned: records.length };
 }
 
 export function nextFreeNumber(adrDir: string): number {
