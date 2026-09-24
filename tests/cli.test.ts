@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { run } from "../src/cli.ts";
-import { captured, makeTempRepo, writeAdrFile } from "./support.ts";
+import { captured, makeTempRepo, writeAdrFile, writeSidecar } from "./support.ts";
 
 describe("pawpie cli", () => {
   test("no args prints help, exit 0", () => {
@@ -64,6 +66,43 @@ describe("pawpie cli", () => {
     expect(doc.reason).toBe("unreadable");
   });
 
+  test("list --json --bogus emits a JSON usage-error record on stdout", () => {
+    const c = captured();
+    const code = run(["list", ".", "--bogus", "--json"], c.stdout, c.stderr);
+    expect(code).toBe(2);
+    const doc = JSON.parse(c.out[0]);
+    expect(doc.schema).toBe("pawpie-list@1");
+    expect(doc.ok).toBe(false);
+    expect(doc.reason).toBe("usage-error");
+  });
+
+  test("recheck --json --bogus emits a JSON usage-error record on stdout", () => {
+    const c = captured();
+    const code = run(["recheck", "0001", "--bogus", "--json"], c.stdout, c.stderr);
+    expect(code).toBe(2);
+    const doc = JSON.parse(c.out[0]);
+    expect(doc.schema).toBe("pawpie-recheck@1");
+    expect(doc.reason).toBe("usage-error");
+  });
+
+  test("a sidecar read failure names recheck.tsv, not the ADR directory", () => {
+    if (process.getuid && process.getuid() === 0) return; // root bypasses permission bits
+    const repo = makeTempRepo();
+    writeAdrFile(repo, "0001-a.md", "# 0001. A\n\n- **Date:** 2026-01-01\n\n## Problem\n\nx\n");
+    writeSidecar(repo, ["0001\t2026-01-01\tclear\tok"]);
+    const sidecarPath = path.join(repo, "docs", "adr", "recheck.tsv");
+    fs.chmodSync(sidecarPath, 0o000);
+
+    const c = captured();
+    const code = run(["list", repo, "--json"], c.stdout, c.stderr);
+
+    fs.chmodSync(sidecarPath, 0o644);
+
+    expect(code).toBe(2);
+    const doc = JSON.parse(c.out[0]);
+    expect(doc.message).toContain("recheck.tsv");
+  });
+
   test("list --json on a populated repo exits 0", () => {
     const repo = makeTempRepo();
     writeAdrFile(repo, "0001-a.md", "# 0001. A\n\n- **Date:** 2026-01-01\n\n## Problem\n\nx\n");
@@ -91,6 +130,25 @@ describe("pawpie cli", () => {
     expect(run(["list", repo], c2.stdout, c2.stderr)).toBe(0);
   });
 
+  test("new rejects --json as an unknown flag rather than silently accepting it", () => {
+    const repo = makeTempRepo();
+    const c = captured();
+    const code = run(["new", "A title", repo, "--json"], c.stdout, c.stderr);
+    expect(code).toBe(2);
+  });
+
+  test("new's filesystem errors are caught, not thrown as a crash", () => {
+    const repo = makeTempRepo();
+    // Put a plain FILE where docs/adr needs to be a directory, so mkdir fails.
+    fs.mkdirSync(path.join(repo, "docs"));
+    fs.writeFileSync(path.join(repo, "docs", "adr"), "not a directory");
+
+    const c = captured();
+    const code = run(["new", "A title", repo], c.stdout, c.stderr);
+    expect(code).toBe(2);
+    expect(c.err.join("\n")).toContain("could not write");
+  });
+
   for (const name of ["recheck", "punch"]) {
     test(`${name} with no id refuses, exit 2`, () => {
       const c = captured();
@@ -105,4 +163,22 @@ describe("pawpie cli", () => {
       expect(c.err.join("\n")).toContain("not built yet");
     });
   }
+
+  test("running the built bundle through a symlink (npm's bin layout) still runs the CLI", () => {
+    const bundle = path.resolve(import.meta.dirname, "..", "bin", "pawpie.mjs");
+    if (!fs.existsSync(bundle)) return; // `bun run build` produces this; skip if not built yet
+
+    const linkDir = fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-symlink-"));
+    const link = path.join(linkDir, "pawpie");
+    fs.symlinkSync(bundle, link);
+
+    // The published artifact must run on stock node (Node Toolchain Standard),
+    // and this bug is specific to Node's argv[1]-vs-import.meta.url symlink
+    // handling — `process.execPath` under `bun test` is bun itself, which
+    // does not reproduce it.
+    const result = spawnSync("node", [link, "--help"], { encoding: "utf8" });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("pawpie");
+  });
 });

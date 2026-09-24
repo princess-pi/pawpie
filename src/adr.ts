@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { readSidecar } from "./sidecar.ts";
 
 export interface AdrError {
   kind: "no-problem" | "no-date" | "unreadable" | "duplicate-number";
@@ -23,17 +24,19 @@ export interface ScanResult {
 
 const README_NAMES = new Set(["readme.md"]);
 
+// Anything else without a leading number (a template, a CHANGELOG, ...) is
+// skipped the same way an index file is, rather than scanned and refused.
 function isAdrFilename(name: string): boolean {
-  return name.toLowerCase().endsWith(".md") && !README_NAMES.has(name.toLowerCase());
+  const lower = name.toLowerCase();
+  if (!lower.endsWith(".md") || README_NAMES.has(lower)) return false;
+  return /^\d+/.test(name);
 }
 
-function parseLeadingNumber(filename: string): number | null {
+function parseLeadingNumber(filename: string): number {
   const m = filename.match(/^(\d+)/);
-  return m ? Number(m[1]) : null;
+  return Number(m![1]);
 }
 
-// Three known date shapes (see issue #1, "Known input shapes"). Tried in
-// order; the first that matches wins.
 const DATE_SHAPES: RegExp[] = [
   /^-\s*\*\*Date:\*\*\s*(\d{4}-\d{2}-\d{2})/m,
   /\*\*Status:\*\*\s*accepted\s*[—-]\s*[^,\n]*,\s*(\d{4}-\d{2}-\d{2})/,
@@ -61,6 +64,9 @@ export function extractProblemSection(content: string): string | null {
   const next = rest.match(/^##\s+/m);
   return (next && next.index !== undefined ? rest.slice(0, next.index) : rest).trim();
 }
+
+export const UNFILLED_PROBLEM_PLACEHOLDER =
+  "<the query you would type into a search two years later — state the problem without naming the option you chose>";
 
 const STOPWORDS = new Set([
   "this", "that", "with", "from", "into", "your", "have", "will",
@@ -95,12 +101,10 @@ export function scanAdrDir(adrDir: string): ScanResult {
 
   for (const file of entries) {
     const number = parseLeadingNumber(file);
-    const id = number === null ? file : String(number).padStart(4, "0");
-    if (number !== null) {
-      const list = numberToFiles.get(id) ?? [];
-      list.push(file);
-      numberToFiles.set(id, list);
-    }
+    const id = String(number).padStart(4, "0");
+    const list = numberToFiles.get(id) ?? [];
+    list.push(file);
+    numberToFiles.set(id, list);
 
     let content: string;
     try {
@@ -108,7 +112,7 @@ export function scanAdrDir(adrDir: string): ScanResult {
     } catch {
       records.push({
         id,
-        number: number ?? -1,
+        number,
         file,
         title: null,
         date: null,
@@ -121,9 +125,10 @@ export function scanAdrDir(adrDir: string): ScanResult {
     const title = extractTitle(content);
     const problemText = extractProblemSection(content);
     const date = extractDate(content);
+    const problemIsUnfilled = problemText !== null && problemText.trim().length === 0;
 
     let error: AdrError | null = null;
-    if (problemText === null) {
+    if (problemText === null || problemIsUnfilled) {
       error = { kind: "no-problem", message: `${file}: no ## Problem section` };
     } else if (date === null) {
       error = { kind: "no-date", message: `${file}: no date in any known shape` };
@@ -131,12 +136,15 @@ export function scanAdrDir(adrDir: string): ScanResult {
 
     records.push({
       id,
-      number: number ?? -1,
+      number,
       file,
       title,
       date,
       problemWarning:
-        problemText !== null && title !== null && problemNamesChosenOption(title, problemText),
+        problemText !== null &&
+        title !== null &&
+        problemText !== UNFILLED_PROBLEM_PLACEHOLDER &&
+        problemNamesChosenOption(title, problemText),
       error,
     });
   }
@@ -159,7 +167,10 @@ export function scanAdrDir(adrDir: string): ScanResult {
 
 export function nextFreeNumber(adrDir: string): number {
   const { adrs } = scanAdrDir(adrDir);
-  const used = new Set(adrs.map((a) => a.number).filter((n) => n >= 0));
+  const used = new Set(adrs.map((a) => a.number));
+  for (const entry of readSidecar(path.join(adrDir, "recheck.tsv"))) {
+    if (/^\d+$/.test(entry.adrId)) used.add(Number(entry.adrId));
+  }
   let n = 1;
   while (used.has(n)) n++;
   return n;

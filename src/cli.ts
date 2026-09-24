@@ -2,7 +2,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildListResult, refuseList, renderListText } from "./list.ts";
+import { ListReadFailure, buildListResult, refuseList, renderListText } from "./list.ts";
 import { createAdr } from "./new.ts";
 import { refuseRecheck } from "./recheck.ts";
 
@@ -22,33 +22,52 @@ Exit codes:
   0   ran; nothing raised (also help)
   1   sidecar unwritable (reserved for recheck/punch — not reachable yet)
   2   usage error: unknown command or flag, a missing title for 'new',
-      no ADR directory for 'list', or recheck/punch (always, id or not)
+      no ADR directory or an unreadable ADR directory/sidecar for 'list',
+      an unwritable ADR directory for 'new', or recheck/punch (always,
+      id or not)
   3   an ADR is present and checks nothing: no ## Problem, no date in any
       known shape, unreadable, or a duplicate number — also returned by
       'new' when the directory already has a duplicate number
   10  at least one ADR raised (Step D, not built yet)
 `;
 
-function splitFlags(args: string[]): { json: boolean; positionals: string[]; unknownFlags: string[] } {
+type Schema = "pawpie-list@1" | "pawpie-recheck@1" | null;
+
+function splitFlags(
+  args: string[],
+  allowed: ReadonlySet<string>,
+): { flags: Set<string>; positionals: string[]; unknownFlags: string[] } {
   const positionals: string[] = [];
   const unknownFlags: string[] = [];
-  let json = false;
+  const flags = new Set<string>();
   for (const arg of args) {
-    if (arg === "--json") json = true;
-    else if (arg.startsWith("--")) unknownFlags.push(arg);
-    else positionals.push(arg);
+    if (!arg.startsWith("--")) positionals.push(arg);
+    else if (allowed.has(arg)) flags.add(arg);
+    else unknownFlags.push(arg);
   }
-  return { json, positionals, unknownFlags };
+  return { flags, positionals, unknownFlags };
 }
 
-function usageError(flag: string, stderr: (s: string) => void): number {
-  stderr(`pawpie: unknown flag "${flag}"`);
+function usageError(
+  flag: string,
+  schema: Schema,
+  json: boolean,
+  stdout: (s: string) => void,
+  stderr: (s: string) => void,
+): number {
+  const message = `unknown flag "${flag}"`;
+  if (json && schema) {
+    stdout(JSON.stringify({ schema, ok: false, reason: "usage-error", message }));
+  } else {
+    stderr(`pawpie: ${message}`);
+  }
   return 2;
 }
 
 function runList(args: string[], stdout: (s: string) => void, stderr: (s: string) => void): number {
-  const { json, positionals, unknownFlags } = splitFlags(args);
-  if (unknownFlags.length > 0) return usageError(unknownFlags[0], stderr);
+  const { flags, positionals, unknownFlags } = splitFlags(args, new Set(["--json"]));
+  const json = flags.has("--json");
+  if (unknownFlags.length > 0) return usageError(unknownFlags[0], "pawpie-list@1", json, stdout, stderr);
 
   const repoPath = positionals[0] ?? ".";
   const adrDir = path.join(repoPath, "docs", "adr");
@@ -64,7 +83,7 @@ function runList(args: string[], stdout: (s: string) => void, stderr: (s: string
   try {
     result = buildListResult(repoPath);
   } catch (err) {
-    const message = `could not read ${adrDir}: ${(err as Error).message}`;
+    const message = err instanceof ListReadFailure ? err.message : `could not read ${adrDir}: ${(err as Error).message}`;
     const refusal = refuseList(repoPath, "unreadable", message);
     if (json) stdout(JSON.stringify(refusal));
     else stderr(`pawpie: ${message}`);
@@ -77,8 +96,8 @@ function runList(args: string[], stdout: (s: string) => void, stderr: (s: string
 }
 
 function runNew(args: string[], stdout: (s: string) => void, stderr: (s: string) => void): number {
-  const { positionals, unknownFlags } = splitFlags(args);
-  if (unknownFlags.length > 0) return usageError(unknownFlags[0], stderr);
+  const { positionals, unknownFlags } = splitFlags(args, new Set());
+  if (unknownFlags.length > 0) return usageError(unknownFlags[0], null, false, stdout, stderr);
 
   const title = positionals[0];
   if (!title) {
@@ -87,7 +106,13 @@ function runNew(args: string[], stdout: (s: string) => void, stderr: (s: string)
   }
   const repoPath = positionals[1] ?? ".";
 
-  const result = createAdr(repoPath, title);
+  let result;
+  try {
+    result = createAdr(repoPath, title);
+  } catch (err) {
+    stderr(`pawpie: could not write to ${path.join(repoPath, "docs", "adr")}: ${(err as Error).message}`);
+    return 2;
+  }
   if (!result.ok) {
     stderr(`pawpie: ${result.error.message}`);
     return 3;
@@ -101,8 +126,9 @@ function runRecheck(
   stdout: (s: string) => void,
   stderr: (s: string) => void,
 ): number {
-  const { json, positionals, unknownFlags } = splitFlags(args);
-  if (unknownFlags.length > 0) return usageError(unknownFlags[0], stderr);
+  const { flags, positionals, unknownFlags } = splitFlags(args, new Set(["--json"]));
+  const json = flags.has("--json");
+  if (unknownFlags.length > 0) return usageError(unknownFlags[0], "pawpie-recheck@1", json, stdout, stderr);
 
   const id = positionals[0] ?? null;
   const refusal = refuseRecheck(id);
@@ -140,7 +166,15 @@ export function run(
   }
 }
 
-const isMain = process.argv[1] !== undefined && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
-if (isMain) {
+function isMainModule(): boolean {
+  if (process.argv[1] === undefined) return false;
+  try {
+    return fileURLToPath(import.meta.url) === fs.realpathSync(process.argv[1]);
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   process.exit(run(process.argv.slice(2)));
 }

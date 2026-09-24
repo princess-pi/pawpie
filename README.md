@@ -25,16 +25,18 @@ work.
 
 ## Install
 
-```
-npx --yes @princess-pi/pawpie <command>
-```
-
-Or from a clone:
+Not on npm yet — install from a clone:
 
 ```
 bun install
 bun run build
 node bin/pawpie.mjs <command>
+```
+
+Once published:
+
+```
+npx --yes @princess-pi/pawpie <command>
 ```
 
 ## Commands
@@ -65,8 +67,11 @@ rather than being read as a positional argument.
   Problem` error is reported.
 - **A title with no letters or digits** (e.g. `"???"`) writes `NNNN-untitled.md` rather than
   refusing.
-- **A malformed line in `recheck.tsv`** — wrong column count, or an `outcome` outside
-  `clear`/`raised`/`skipped` — is skipped rather than refused.
+- **A malformed line in `recheck.tsv`** — fewer than four tab-separated columns, or an `outcome`
+  outside `clear`/`raised`/`skipped` — is skipped rather than refused. Extra columns past the
+  fourth are folded into the note, and the date column itself is not validated.
+- **A sidecar `<adr_id>` is normalized** the same way a scanned file's id is: `4` and `00004` both
+  match ADR `0004`.
 
 ## The one writing rule
 
@@ -102,7 +107,7 @@ fields, never on the exit code alone.
 |---|---|
 | 0 | ran; nothing raised (also help) |
 | 1 | sidecar unwritable (reserved for `recheck`/`punch` — not reachable until Step D) |
-| 2 | usage error: an unknown command or flag, a missing title for `new`, no ADR directory for `list`, or `recheck`/`punch` (always — id or not) |
+| 2 | usage error: an unknown command or flag, a missing title for `new`, no ADR directory or an unreadable ADR directory/sidecar for `list`, an unwritable ADR directory for `new`, or `recheck`/`punch` (always — id or not) |
 | 3 | an ADR is present and checks nothing: no `## Problem`, no date in any known shape, unreadable, or a duplicate number — also returned by `new` when the directory already has a duplicate number |
 | 10 | at least one ADR raised (Step D, not built yet) |
 

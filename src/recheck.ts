@@ -7,8 +7,6 @@ export interface RecheckRefusal {
   exitCode: 2;
 }
 
-// `recheck` (alias `punch`) is Step D, out of scope for v0. Both names exist
-// and refuse the same way so the alias is pinned from day one (issue #1).
 export function refuseRecheck(id: string | null): RecheckRefusal {
   if (id === null) {
     return {

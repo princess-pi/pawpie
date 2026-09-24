@@ -3,10 +3,11 @@
 Re-triage decision records (ADRs) when the world moves. Public, `@princess-pi/pawpie`, not on npm
 yet. Origin: [duppypro/btw#106](https://github.com/duppypro/btw/issues/106).
 
-This repo is **public**. No client names, no private-repo issue links, no internal repo details —
-[duppypro/btw#106](https://github.com/duppypro/btw/issues/106) and
-[quoteinvestigator.com](https://quoteinvestigator.com/2017/11/18/planning/) are the only outside
-links this repo carries.
+This repo is **public**. No client names, no private-repo issue links, no internal repo details.
+The only outside *project* links it carries are
+[duppypro/btw#106](https://github.com/duppypro/btw/issues/106) (origin) and
+[quoteinvestigator.com](https://quoteinvestigator.com/2017/11/18/planning/) (the quote source) —
+this does not count Duppy's own GitHub profile or this repo's own issue tracker.
 
 ## Workflow
 

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { hasDuplicateNumbers, nextFreeNumber } from "./adr.ts";
+import { UNFILLED_PROBLEM_PLACEHOLDER, hasDuplicateNumbers, nextFreeNumber } from "./adr.ts";
 
 export interface NewAdrError {
   kind: "duplicate-number";
@@ -46,7 +46,7 @@ export function createAdr(repoPath: string, title: string): NewAdrResult {
 
 ## Problem
 
-<the query you would type into a search two years later — state the problem without naming the option you chose>
+${UNFILLED_PROBLEM_PLACEHOLDER}
 
 ## Decision
 

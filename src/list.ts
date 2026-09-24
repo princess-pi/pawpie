@@ -31,11 +31,32 @@ function compareListed(a: ListedAdr, b: ListedAdr): number {
   return a.id.localeCompare(b.id);
 }
 
+// Names which path a read failure came from, so a caller can report the
+// actual offending file instead of always blaming the ADR directory.
+export class ListReadFailure extends Error {
+  constructor(public readonly failedPath: string, cause: unknown) {
+    super(`could not read ${failedPath}: ${(cause as Error).message}`);
+  }
+}
+
 export function buildListResult(repoPath: string): ListResult {
   const adrDir = path.join(repoPath, "docs", "adr");
   const sidecarPath = path.join(adrDir, "recheck.tsv");
-  const { adrs, scanned } = scanAdrDir(adrDir);
-  const lastChecks = lastCheckByAdr(readSidecar(sidecarPath));
+
+  let adrs: AdrRecord[];
+  let scanned: number;
+  try {
+    ({ adrs, scanned } = scanAdrDir(adrDir));
+  } catch (err) {
+    throw new ListReadFailure(adrDir, err);
+  }
+
+  let lastChecks: Map<string, CheckEntry>;
+  try {
+    lastChecks = lastCheckByAdr(readSidecar(sidecarPath));
+  } catch (err) {
+    throw new ListReadFailure(sidecarPath, err);
+  }
 
   const listed: ListedAdr[] = adrs.map((adr: AdrRecord) => {
     const check: CheckEntry | undefined = lastChecks.get(adr.id);
