@@ -5,7 +5,15 @@ import { fileURLToPath } from "node:url";
 import { ReadFailure, errorCode } from "./errors.ts";
 import { buildListResult, refuseList, renderListText } from "./list.ts";
 import { createAdr } from "./new.ts";
-import { refuseRecheck, refuseRecheckUsage } from "./recheck.ts";
+import {
+  createSearchAdapterFromEnv,
+  refuseMissingId,
+  refuseRecheckUsage,
+  runRecheck,
+  type RecheckResult,
+  type RecheckRefusal,
+} from "./recheck.ts";
+import { runMcpStdioServer } from "./mcp-server.ts";
 
 const HELP = `pawpie — re-triage decision records (ADRs) when the world moves
 
@@ -13,25 +21,32 @@ Usage:
   pawpie                          print this help (also --help / -h)
   pawpie list [path] [--json]     every ADR, oldest check first, never-checked at the top
   pawpie new "<title>" [path]     next free number, a template with ## Problem and one date line
-  pawpie recheck <id> [path] [--json]   not built yet (refuses, exit 2)
+  pawpie recheck <id> [path] [--json]   search the world; raise or stay quiet
   pawpie punch <id> [path] [--json]     alias for recheck
 
 'path' defaults to the current directory. ADRs live under <path>/docs/adr/.
 'list' refuses when that directory is missing; 'new' creates it.
 
+recheck/punch never edits an ADR. It searches with EXA (EXA_API_KEY in the
+environment) via a judge process — 'claude -p --model opus --effort medium'
+by default, overridable with PAWPIE_JUDGE_CMD — then appends one line to
+docs/adr/recheck.tsv. There is no cost cap; --json reports what the judge
+actually used.
+
 Exit codes:
-  0   ran; nothing raised (also help)
-  1   sidecar unwritable (reserved for recheck/punch — not reachable yet)
+  0   ran; nothing raised (also help, and recheck/punch outcome "clear")
+  1   recheck/punch: the judge failed, or the sidecar could not be appended to
   2   usage error: unknown command, unknown flag (any '-' or '--' token
       the command doesn't take), an unexpected extra argument, a missing
       or newline-containing title for 'new', no ADR directory or an
       unreadable ADR directory/sidecar for 'list', an unwritable ADR
       directory for 'new' (or an unreadable ADR directory/sidecar, naming
-      that path instead), or recheck/punch (always, id or not)
+      that path instead), or recheck/punch with no id, an unknown id, or
+      an ADR that already fails its own 'list' checks
   3   an ADR is present and checks nothing: no ## Problem, no date in any
       known shape, unreadable, or a duplicate number — also returned by
       'new' when the directory already has a duplicate number
-  10  at least one ADR raised (Step D, not built yet)
+  10  recheck/punch raised the ADR for a human to triage
 `;
 
 type Schema = "pawpie@1" | null;
@@ -166,7 +181,7 @@ function runNew(args: string[], stdout: (s: string) => void, stderr: (s: string)
   return 0;
 }
 
-function runRecheck(
+function runRecheckCommand(
   args: string[],
   stdout: (s: string) => void,
   stderr: (s: string) => void,
@@ -174,6 +189,7 @@ function runRecheck(
   const { flags, positionals, unknownFlags } = splitFlags(args, new Set(["--json"]));
   const json = flags.has("--json");
   const id = positionals[0] ?? null;
+  const repoPath = positionals[1] ?? ".";
 
   if (unknownFlags.length > 0 || positionals.length > 2) {
     const message =
@@ -186,13 +202,33 @@ function runRecheck(
     return refusal.exitCode;
   }
 
-  const refusal = refuseRecheck(id);
-  if (json) {
-    stdout(JSON.stringify(refusal));
-  } else {
-    stderr(`pawpie: ${refusal.message}`);
+  if (id === null) {
+    const refusal = refuseMissingId();
+    if (json) stdout(JSON.stringify(refusal));
+    else stderr(`pawpie: ${refusal.message}`);
+    return refusal.exitCode;
   }
-  return refusal.exitCode;
+
+  let result: RecheckResult | RecheckRefusal;
+  try {
+    result = runRecheck(repoPath, id);
+  } catch (err) {
+    const message = err instanceof ReadFailure ? err.message : `could not read ADR ${id}: ${(err as Error).message}`;
+    stderr(`pawpie: ${message}`);
+    return 2;
+  }
+
+  if (json) stdout(JSON.stringify(result));
+  else if (!result.ok) stderr(`pawpie: ${result.message}`);
+  else if (result.outcome === "clear") stdout(`${result.id}: clear`);
+  else {
+    stdout(`${result.id}: raised`);
+    for (const raise of result.raises) {
+      stdout(`  [${raise.trigger}] ${raise.note}`);
+      stdout(`    ${raise.evidence.url} — "${raise.evidence.quote}"`);
+    }
+  }
+  return result.exitCode;
 }
 
 export function run(
@@ -214,7 +250,7 @@ export function run(
       return runNew(rest, stdout, stderr);
     case "recheck":
     case "punch":
-      return runRecheck(rest, stdout, stderr);
+      return runRecheckCommand(rest, stdout, stderr);
     default:
       return usageError(`unknown command "${command}"`, "pawpie@1", argv.includes("--json"), stdout, stderr);
   }
@@ -229,8 +265,20 @@ function isMainModule(): boolean {
   }
 }
 
+// Undocumented on purpose: this is the MCP search server judge.ts spawns as
+// a child of the judge command, over its own stdio, never invoked by a
+// human. It never returns — it runs until stdin closes.
+function runMcpServeEntry(): void {
+  const adapter = createSearchAdapterFromEnv(process.env);
+  runMcpStdioServer(adapter, process.env.PAWPIE_MCP_COUNTS_FILE);
+}
+
 if (isMainModule()) {
-  // Not process.exit(): stdout to a pipe can be asynchronous, and exiting
-  // immediately after a large console.log can truncate it before it flushes.
-  process.exitCode = run(process.argv.slice(2));
+  if (process.argv[2] === "__mcp-serve") {
+    runMcpServeEntry();
+  } else {
+    // Not process.exit(): stdout to a pipe can be asynchronous, and exiting
+    // immediately after a large console.log can truncate it before it flushes.
+    process.exitCode = run(process.argv.slice(2));
+  }
 }

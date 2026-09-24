@@ -18,10 +18,10 @@ Origin and background: [duppypro/btw#106](https://github.com/duppypro/btw/issues
 
 ## Status: v0
 
-This is the scaffold plus `list` and `new`. `recheck` (alias `punch`) — going out to the internet
-to see whether a decision survives first contact with today's world — is Step D, specified in its
-own issue and not built yet. Both names exist today and refuse clearly instead of pretending to
-work.
+`list`, `new`, and `recheck` (alias `punch`) — Step D, going out to the internet to see whether a
+decision survives first contact with today's world — are all built. `recheck`/`punch` never
+re-decides and never edits an ADR: it either raises the decision, with evidence, for a human to
+triage, or stays quiet.
 
 ## Install
 
@@ -46,12 +46,37 @@ npx --yes @princess-pi/pawpie <command>
 | `pawpie` (also `--help` / `-h`) | prints help, runs nothing | — |
 | `pawpie list [path] [--json]` | every ADR with its date and last check, oldest check first, never-checked at the top | no network, no tokens |
 | `pawpie new "<title>" [path]` | next free number, a template with `## Problem` and one date line | local |
-| `pawpie recheck <id> [path] [--json]` (alias `pawpie punch <id> [path] [--json]`) | not built yet — refuses, exit 2 | — |
+| `pawpie recheck <id> [path] [--json]` (alias `pawpie punch <id> [path] [--json]`) | searches the world for decision `<id>`, raises with evidence or stays quiet, appends one `recheck.tsv` row | a search backend (EXA) plus one judge model call — no cap |
 
 `path` defaults to the current directory. ADRs live under `<path>/docs/adr/`. `list` refuses when
 that directory is missing; `new` creates it. An unrecognized flag — any `-` or `--` token the
 command doesn't take, including a bare `-h`/`-v` after the subcommand — or an unexpected extra
 argument, is a usage error (exit 2) rather than being read as a positional argument.
+
+## How `recheck`/`punch` works
+
+1. Read the ADR's `## Problem` — the query is the problem, never the option the ADR already chose.
+2. Hand it to a judge model, along with a small search interface exposed as two tools (`search`,
+   `fetch_url`), and let the judge drive its own research: vendor/official sources first, then free
+   APIs, then a broader web search. **There is no cost cap** — the judge decides how much research
+   a decision needs, the same way the original decision was researched.
+3. The judge raises on exactly three triggers, and never on anything else:
+   - **a new option** the ADR does not record;
+   - **a driver's answer moved** (price, availability, a supply shock, an EOL/PCN notice, a
+     competitor shipping a feature);
+   - **a recorded alternative's reason for being set aside no longer holds**.
+4. Every raise carries evidence — a URL and a direct quote — and never a recommendation:
+   `recheck`/`punch` never re-decides.
+5. Exactly one line is appended to `docs/adr/recheck.tsv`, whether the outcome is `raised` or
+   `clear`. The ADR file itself is never touched.
+
+**Search backend:** EXA, read from `EXA_API_KEY` in the environment — never from a file in this
+repo. **Judge:** a harness CLI shelled out to in print mode, default
+`claude -p --model opus --effort medium`, overridable with `PAWPIE_JUDGE_CMD` (so a Pi or Codex
+user can swap it) as long as the replacement understands `--mcp-config <file>` the way Claude Code
+does — pawpie hands the judge its search tools over MCP, spawned as `pawpie`'s own hidden
+`__mcp-serve` subcommand, and holds no model key of its own. `--json` reports what the judge
+actually used (`usage.searches`, `usage.fetches`, `usage.judgeCalls`) — it never limits it.
 
 ## v0 known limits
 
@@ -97,6 +122,14 @@ argument, is a usage error (exit 2) rather than being read as a positional argum
 - **`docs/adr` existing as a plain file, not a directory,** is reported the same way as it being
   entirely missing — `no-adr-directory` for `list`, and `new`'s own `mkdirSync` failing under it
   for `new`.
+- **`PAWPIE_JUDGE_CMD` is split on whitespace, not shell-parsed** — a replacement command containing
+  a quoted argument with a space in it will not round-trip. It must also understand
+  `--mcp-config <file> --strict-mcp-config`, the way Claude Code's `claude -p` does; a judge CLI
+  with no MCP support can still run, but never calls `search`/`fetch_url`, so `usage.searches` and
+  `usage.fetches` honestly read 0 and the verdict rests on whatever the model already knows.
+- **`__mcp-serve` is an undocumented, internal subcommand** — the MCP search server `recheck`/
+  `punch` spawns as a child of the judge process, over its own stdio. It is never meant to be run
+  by a human and carries no stability guarantee across versions.
 
 ## The one writing rule
 
@@ -121,9 +154,11 @@ inject its own `## Problem`/`## Decision` markdown, read back as real content.
 <adr_id>	<YYYY-MM-DD>	<clear|raised|skipped>	<one-line note>
 ```
 
-`list` reads it to show the last check per ADR; nothing writes it yet. Reading it tolerates a
-leading UTF-8 BOM and both `\n` and `\r\n` line endings. Two lines for the same ADR on the same
-date: the later line in the file wins.
+`list` reads it to show the last check per ADR; `recheck`/`punch` is what writes it, one line per
+run. Reading it tolerates a leading UTF-8 BOM and both `\n` and `\r\n` line endings. Two lines for
+the same ADR on the same date: the later line in the file wins. When a run raises more than one
+trigger, every raise's note is folded onto that one line, joined with `; ` — the full evidence
+(URL and quote) for each raise is only in the `--json` record, not the sidecar row.
 
 ## Known input shapes
 
@@ -153,8 +188,14 @@ guarantee.
 - **`ok: false`** — `path`, `message`, `exitCode` (always 2), `reason` of `no-adr-directory` /
   `unreadable` / `usage-error`.
 
-`pawpie-recheck@1` refusals carry `id` (`null` when none was given), `message`, `exitCode` (always
-2), and `reason` of `missing-id` / `not-built-yet` / `usage-error`.
+`pawpie-recheck@1` covers two shapes, told apart by `ok`:
+
+- **`ok: true`** — `id`, `outcome` (`clear` or `raised`), `raises[]` (each with `trigger` of
+  `new-option` / `driver-moved` / `reason-no-longer-holds`, `note`, `evidence: {url, quote}`),
+  `usage: {searches, fetches, judgeCalls}`, `exitCode` (0 clear, 10 raised).
+- **`ok: false`** — `id` (`null` when none was given), `message`, `exitCode` (2 or 1), and `reason`
+  of `missing-id` / `usage-error` / `adr-not-found` / `adr-invalid` (exit 2), or `judge-failed` /
+  `sidecar-unwritable` (exit 1).
 
 Two ADRs that tie on last-check date (or are both never-checked) sort by ADR id, numerically —
 `0010` after `0009`, not before it lexically.
@@ -165,11 +206,11 @@ title or sidecar date containing one comes through as `\u001b`, not a raw byte.
 
 | exit | meaning |
 |---|---|
-| 0 | ran; nothing raised (also help) |
-| 1 | sidecar unwritable (reserved for `recheck`/`punch` — not reachable until Step D) |
-| 2 | usage error: an unknown command, an unknown flag, an unexpected extra argument, a missing or newline-containing title for `new`, no ADR directory or an unreadable ADR directory/sidecar for `list`, an unwritable ADR directory for `new` (or an unreadable ADR directory/sidecar, reported by naming that path instead), or `recheck`/`punch` (always — id or not) |
+| 0 | ran; nothing raised (also help, and a `recheck`/`punch` outcome of `clear`) |
+| 1 | `recheck`/`punch`: the judge failed (nonzero exit or an unparseable/invalid verdict), or `recheck.tsv` could not be appended to |
+| 2 | usage error: an unknown command, an unknown flag, an unexpected extra argument, a missing or newline-containing title for `new`, no ADR directory or an unreadable ADR directory/sidecar for `list`, an unwritable ADR directory for `new` (or an unreadable ADR directory/sidecar, reported by naming that path instead), or `recheck`/`punch` with no id, an id that doesn't exist, or an ADR that already fails its own `list` checks |
 | 3 | an ADR is present and checks nothing: no `## Problem`, no date in any known shape, unreadable, or a duplicate number — also returned by `new` when the directory already has a duplicate number |
-| 10 | at least one ADR raised (Step D, not built yet) |
+| 10 | `recheck`/`punch` raised the decision for a human to triage |
 
 ---
 

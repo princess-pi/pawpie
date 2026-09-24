@@ -24,10 +24,14 @@ there about as often as you commit.
 - **Never edit build output.** `bin/pawpie.mjs` is a gitignored bundle. Edit `src/*.ts`, then
   `bun run build`.
 - **The bundle imports only `node:` builtins.** It must run on stock node (`node bin/pawpie.mjs`),
-  since a published package ships prebuilt output and never requires bun at the consumer end.
-- **Step D (`recheck`/`punch`) is out of scope for v0.** Both names exist and refuse, exit 2 —
-  "requires an ADR id" with none given, "not built yet" once one is — see `src/recheck.ts`. It is
-  specified in its own issue.
+  since a published package ships prebuilt output and never requires bun at the consumer end. This
+  includes `recheck`/`punch`'s judge and MCP-server wiring: no MCP SDK dependency, hand-rolled
+  JSON-RPC over stdio in `src/mcp-server.ts` instead.
+- **`recheck`/`punch` never edits an ADR and never re-decides.** It raises with evidence (a URL and
+  a quote) or stays quiet, and appends exactly one line to `docs/adr/recheck.tsv` per run. Tests
+  must never call the real EXA search backend or the real judge model — use `PAWPIE_SEARCH_ADAPTER=
+  fixture` / `PAWPIE_SEARCH_FIXTURE` and a fake `PAWPIE_JUDGE_CMD` (see `tests/support.ts`'s
+  `fakeJudgeEnv`).
 
 ## Stack
 
@@ -57,7 +61,16 @@ there about as often as you commit.
 - `src/list.ts` — `pawpie list`: builds and sorts the `pawpie-list@1` record.
 - `src/new.ts` — `pawpie new`: next free ADR number, writes the template; refuses a
   newline-containing title (exit 2) before touching the filesystem.
-- `src/recheck.ts` — `pawpie recheck`/`pawpie punch`: refusal only (Step D).
+- `src/recheck.ts` — `pawpie recheck`/`pawpie punch`: looks up the ADR, runs the judge, appends
+  the sidecar row, and shapes the `pawpie-recheck@1` result/refusal.
+- `src/judge.ts` — builds the judge prompt, spawns `PAWPIE_JUDGE_CMD` (default `claude -p --model
+  opus --effort medium`) with an MCP config pointed at `__mcp-serve`, and validates the verdict
+  JSON it returns.
+- `src/search-adapter.ts` — the `SearchAdapter` interface (`search`, `fetch`), an EXA-backed
+  implementation, and the fixture adapter tests use.
+- `src/mcp-server.ts` — the JSON-RPC/stdio MCP server exposing `search`/`fetch_url` to the judge;
+  `handleMcpRequest` is the pure, unit-testable core, `runMcpStdioServer` the stdio wrapper the
+  hidden `__mcp-serve` subcommand runs.
 - `src/errors.ts` — `ReadFailure` (wraps a read error with the path that failed) and
   `errorCode()`, used by `cli.ts`, `list.ts`, and `adr.ts` to tell an unreadable path from
   a missing one.

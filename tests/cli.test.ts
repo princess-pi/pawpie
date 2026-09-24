@@ -209,13 +209,25 @@ describe("pawpie cli", () => {
       const c = captured();
       const code = run([name], c.stdout, c.stderr);
       expect(code).toBe(2);
+      expect(c.err.join("\n")).toContain("requires an ADR id");
     });
 
-    test(`${name} with an id still refuses (not built yet), exit 2`, () => {
+    test(`${name} against an ADR that doesn't exist refuses, exit 2`, () => {
+      const repo = makeTempRepo();
+      writeAdrFile(repo, "0001-a.md", "# 0001. A\n\n- **Date:** 2026-01-01\n\n## Problem\n\nx\n");
       const c = captured();
-      const code = run([name, "0001"], c.stdout, c.stderr);
+      const code = run([name, "0002", repo], c.stdout, c.stderr);
       expect(code).toBe(2);
-      expect(c.err.join("\n")).toContain("not built yet");
+      expect(c.err.join("\n")).toContain("no ADR 0002");
+    });
+
+    test(`${name} against an ADR that already fails 'list' checks refuses, exit 2`, () => {
+      const repo = makeTempRepo();
+      writeAdrFile(repo, "0001-no-problem.md", "# 0001. No problem\n\n- **Date:** 2026-01-01\n\n## Decision\n");
+      const c = captured();
+      const code = run([name, "0001", repo], c.stdout, c.stderr);
+      expect(code).toBe(2);
+      expect(c.err.join("\n")).toContain("fails its own checks");
     });
   }
 
