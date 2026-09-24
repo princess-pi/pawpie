@@ -40,6 +40,12 @@ export interface JudgeVerdict {
   // not it raised — required to cover every claim in the iterated list, so a
   // "clear" verdict can't mean "pass 1 silently skipped some claims".
   checkedClaims: ClaimRef[];
+  // Every question pass 2 actually asked — required to equal exactly the
+  // available questions (QUESTIONS minus `unchecked`), the pass-2 mirror of
+  // `checkedClaims`: without it a "clear" verdict could mean the judge never
+  // considered new-options/changed-capabilities at all, not that it checked
+  // and found no change.
+  checkedQuestions: Question[];
   // Pass-2 questions the judge could not check because its input (repo spec
   // context, agent capability list) was unavailable — always exactly the set
   // of genuinely unavailable questions (see pass2QuestionAvailable), never
@@ -83,10 +89,17 @@ export interface Pass2Context {
 
 const MAX_CONTEXT_CHARS = 20_000;
 
+// What the judge actually sees of a pass-2 artifact — evidence is checked
+// against this, not the full text, since a quote past the cutoff was never
+// shown to the judge and cannot be honest evidence.
+function truncatedFor(text: string): string {
+  return text.slice(0, MAX_CONTEXT_CHARS);
+}
+
 function contextBlock(label: string, text: string | null): string {
   if (text === null) return `${label}: UNAVAILABLE.`;
   if (text.length <= MAX_CONTEXT_CHARS) return `${label}:\n${text}`;
-  return `${label} (truncated to the first ${MAX_CONTEXT_CHARS} characters of a longer document):\n${text.slice(0, MAX_CONTEXT_CHARS)}`;
+  return `${label} (truncated to the first ${MAX_CONTEXT_CHARS} characters of a longer document):\n${truncatedFor(text)}`;
 }
 
 // Whether the input pass 2 needs for a given question is available at all —
@@ -121,10 +134,10 @@ extracted.`
 
   return `You are pawpie's judge. You re-triage ADR ${adrId} against today's world, in two passes. \
 You never recommend a replacement decision and never re-decide — pawpie's whole job is triage, not \
-choice. Use the "search" and "fetch_url" tools as many times as you need. Both tools cost the same \
-regardless of what they return, so there is no cheaper tier to prefer — but a targeted query \
-against a vendor's own docs or changelog usually settles a claim in fewer calls than a broad web \
-search does, so try the specific source first. There is no cost cap, so keep going until you are \
+choice. Use the "search" and "fetch_url" tools as many times as you need. Neither is free, and \
+there is no cheaper tier to prefer between them — but a targeted query against a vendor's own docs \
+or changelog usually settles a claim in fewer calls than a broad web search does, so try the \
+specific source first. There is no cost cap, so keep going until you are \
 satisfied.
 
 PASS 1 — iterate the claims. ${claimsSection}
@@ -146,6 +159,9 @@ ${abilitiesAvailable ? "" : 'No agent-capability input is available below — yo
 4. "changed-spec": has our own requirement moved, so the original question should be asked \
 differently? Judge this against the repo context below, never from general knowledge. \
 ${changedSpecAvailable ? "" : 'Neither the README nor open issues are available below — you cannot check this; report "changed-spec" in "unchecked".'}
+List every question you actually asked (raised or not) under "checkedQuestions" — it must equal \
+exactly the questions whose input above was available, so a caller can tell "checked, no change" \
+apart from "never considered".
 
 ${contextBlock("Repo README", pass2.readme)}
 
@@ -166,6 +182,7 @@ Reply with ONLY a JSON object (no prose, no markdown fence) matching exactly:
              "evidence": {"source": "<url or repo artifact>", "quote": "<direct quote>"}}],
  "extractedClaims": [{"text": "<claim text>", "disposition": "taken" | "not-taken"}],
  "checkedClaims": [{"text": "<claim text>", "disposition": "taken" | "not-taken"}, ...every claim iterated],
+ "checkedQuestions": ["new-options" | "changed-capabilities" | "new-make-abilities" | "changed-spec", ...every question asked],
  "unchecked": ["new-options" | "changed-capabilities" | "new-make-abilities" | "changed-spec", ...]}
 "raises" is empty when outcome is "clear". "extractedClaims" is empty when the ADR already had a \
 usable "## Claims" section. "unchecked" lists only questions 3/4 you could not check because their \
@@ -211,10 +228,15 @@ function claimKey(c: ClaimRef): string {
 // Anything not a URL and not one of these three is not a source pawpie ever
 // told the judge to use, and is rejected outright.
 function pass2ArtifactText(source: string, pass2: Pass2Context): string | null {
-  if (source === "README.md") return pass2.readme;
-  if (/^issue #\d+$/.test(source)) return pass2.openIssues;
-  if (source === "agent skills list") return pass2.agentCapabilities;
-  return null;
+  const text =
+    source === "README.md"
+      ? pass2.readme
+      : /^issue #\d+$/.test(source)
+        ? pass2.openIssues
+        : source === "agent skills list"
+          ? pass2.agentCapabilities
+          : null;
+  return text === null ? null : truncatedFor(text);
 }
 
 // `recordedClaims` is the parsed `## Claims` list, or null when the judge
@@ -341,7 +363,26 @@ function validateVerdict(
   }
   const unchecked = QUESTIONS.filter((q) => !pass2QuestionAvailable(q, pass2));
 
-  return { outcome: d.outcome, raises, extractedClaims, checkedClaims, unchecked };
+  // Pass 2's checkedClaims equivalent: without it, a "clear" verdict could
+  // mean the judge never asked new-options/changed-capabilities at all —
+  // those two are always "available" and so can never land in `unchecked`.
+  const checkedQuestions = Array.isArray(d.checkedQuestions)
+    ? d.checkedQuestions.filter((q): q is Question => QUESTIONS.includes(q as Question))
+    : [];
+  const checkedQuestionSet = new Set(checkedQuestions);
+  const availableQuestions = QUESTIONS.filter((q) => pass2QuestionAvailable(q, pass2));
+  for (const q of availableQuestions) {
+    if (!checkedQuestionSet.has(q)) {
+      throw new JudgeError(`"checkedQuestions" is missing "${q}", which pass 2 was supposed to ask`);
+    }
+  }
+  for (const q of checkedQuestionSet) {
+    if (!pass2QuestionAvailable(q, pass2)) {
+      throw new JudgeError(`"checkedQuestions" names "${q}", but its input was UNAVAILABLE`);
+    }
+  }
+
+  return { outcome: d.outcome, raises, extractedClaims, checkedClaims, checkedQuestions, unchecked };
 }
 
 export interface JudgeOptions {

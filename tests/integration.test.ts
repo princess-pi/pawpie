@@ -41,6 +41,7 @@ const hits = JSON.parse(searchResponse.result.content[0].text);
 const raised = hits.some((h) => h.title.includes("${RAISE_MARKER}"));
 
 const checkedClaims = [{ text: "bun hardlinks packages from a global cache", disposition: "taken" }];
+const checkedQuestions = ["new-options", "changed-capabilities"];
 
 const verdict = raised
   ? {
@@ -55,9 +56,10 @@ const verdict = raised
       ],
       extractedClaims: [],
       checkedClaims,
+      checkedQuestions,
       unchecked: [],
     }
-  : { outcome: "clear", raises: [], extractedClaims: [], checkedClaims, unchecked: [] };
+  : { outcome: "clear", raises: [], extractedClaims: [], checkedClaims, checkedQuestions, unchecked: [] };
 
 process.stdout.write(JSON.stringify(verdict));
 `,
@@ -100,6 +102,7 @@ const verdict = {
   ],
   extractedClaims: [],
   checkedClaims: [{ text: "bun hardlinks packages from a global cache", disposition: "taken" }],
+  checkedQuestions: ["new-options", "changed-capabilities"],
   unchecked: [],
 };
 

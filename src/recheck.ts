@@ -68,7 +68,7 @@ export function refuseMissingId(): RecheckRefusal {
 }
 
 // Normalizes the way sidecar.ts does, so `pawpie punch 4` finds ADR 0004.
-function normalizeId(raw: string): string {
+export function normalizeId(raw: string): string {
   return /^\d+$/.test(raw) ? String(Number(raw)).padStart(4, "0") : raw;
 }
 
@@ -106,13 +106,14 @@ function appendSidecarLine(adrDir: string, id: string, outcome: "raised" | "clea
 // A committed sidecar row is the only durable record of a run — JudgeUsage's
 // error/null counts only reach --json. A bare "clear" here would be
 // indistinguishable from a fully researched one, so a run where research
-// plainly did not happen (usage unknown, or every attempted call failed)
-// says so in the row itself.
+// plainly did not happen (usage unknown, zero calls attempted, or every
+// attempted call failed) says so in the row itself.
 function usageCaveat(usage: JudgeUsage): string | null {
   if (usage.searches === null || usage.fetches === null) return "usage unknown";
   const attempted = usage.searches + (usage.searchErrors ?? 0) + usage.fetches + (usage.fetchErrors ?? 0);
   const failed = (usage.searchErrors ?? 0) + (usage.fetchErrors ?? 0);
-  if (attempted > 0 && failed === attempted) return "every search/fetch call failed";
+  if (attempted === 0) return "no search/fetch calls made";
+  if (failed === attempted) return "every search/fetch call failed";
   return null;
 }
 
@@ -144,6 +145,13 @@ function claimsFor(adrContent: string): Claim[] | null {
 // input reaches the judge as UNAVAILABLE — but a read failure other than the
 // README's ENOENT is a misconfiguration, not "unavailable", and propagates
 // into runRecheck's pass2-context-unreadable refusal instead of a silent null.
+// Empty or whitespace-only counts as unavailable, the same as missing —
+// otherwise an existing-but-blank file forces its question "available",
+// and a judge honestly reporting it unchecked is rejected as judge-failed.
+function nonBlank(text: string | null): string | null {
+  return text !== null && text.trim().length > 0 ? text : null;
+}
+
 function gatherPass2Context(repoPath: string, env: NodeJS.ProcessEnv): Pass2Context {
   let readme: string | null = null;
   try {
@@ -156,7 +164,7 @@ function gatherPass2Context(repoPath: string, env: NodeJS.ProcessEnv): Pass2Cont
   const openIssues = env.PAWPIE_PASS2_ISSUES_FIXTURE ? fs.readFileSync(env.PAWPIE_PASS2_ISSUES_FIXTURE, "utf8") : null;
   const agentCapabilities = env.PAWPIE_AGENT_CAPABILITIES ? fs.readFileSync(env.PAWPIE_AGENT_CAPABILITIES, "utf8") : null;
 
-  return { readme, openIssues, agentCapabilities };
+  return { readme: nonBlank(readme), openIssues: nonBlank(openIssues), agentCapabilities: nonBlank(agentCapabilities) };
 }
 
 // Decides which env vars to forward to the spawned `__mcp-serve` child;
@@ -178,8 +186,19 @@ function searchConfigError(env: NodeJS.ProcessEnv): string | null {
   if (env.PAWPIE_SEARCH_FIXTURE) {
     try {
       const fixture: unknown = JSON.parse(fs.readFileSync(env.PAWPIE_SEARCH_FIXTURE, "utf8"));
-      if (typeof fixture !== "object" || fixture === null || !Array.isArray((fixture as { results?: unknown }).results)) {
+      const results = typeof fixture === "object" && fixture !== null ? (fixture as { results?: unknown }).results : undefined;
+      if (!Array.isArray(results)) {
         return `PAWPIE_SEARCH_FIXTURE (${env.PAWPIE_SEARCH_FIXTURE}) is not a fixture: it needs a "results" array`;
+      }
+      // Each hit's shape is what mcp-server.ts logs as evidence (url/text) —
+      // a hit missing either silently discards the *entire* evidence log
+      // downstream (judge.ts's shape check on the parsed array), rejecting
+      // every URL-sourced raise with a misleading "never returned" error.
+      const badHit = results.find(
+        (r) => typeof r !== "object" || r === null || typeof (r as { url?: unknown }).url !== "string" || typeof (r as { text?: unknown }).text !== "string",
+      );
+      if (badHit !== undefined) {
+        return `PAWPIE_SEARCH_FIXTURE (${env.PAWPIE_SEARCH_FIXTURE}) has a result missing a string "url" or "text": ${JSON.stringify(badHit)}`;
       }
     } catch (err) {
       return `PAWPIE_SEARCH_FIXTURE (${env.PAWPIE_SEARCH_FIXTURE}) could not be read as JSON: ${(err as Error).message}`;

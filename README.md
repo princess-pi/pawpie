@@ -45,7 +45,7 @@ npx --yes @princess-pi/pawpie <command>
 |---|---|---|
 | `pawpie` (also `--help` / `-h`) | prints help, runs nothing | — |
 | `pawpie list [path] [--json]` | every ADR with its date and last check, oldest check first, never-checked at the top | no network, no tokens |
-| `pawpie new "<title>" [path]` | next free number, a template with `## Problem` and one date line | local |
+| `pawpie new "<title>" [path]` | next free number, a template with `## Problem`, `## Claims`, and one date line | local |
 | `pawpie recheck <id> [path] [--json]` (alias `pawpie punch <id> [path] [--json]`) | searches the world for decision `<id>`, raises with evidence or stays quiet, appends one `recheck.tsv` row on success | a search backend (EXA) plus one judge model call — no cap |
 
 `path` defaults to the current directory. ADRs live under `<path>/docs/adr/`. `list` refuses when
@@ -58,9 +58,9 @@ argument, is a usage error (exit 2) rather than being read as a positional argum
 A decision record carries the date it was made, the original question (`## Problem`), the
 decision, and the claims behind it (`## Claims`) — every claim researched, for the road taken and
 for every road not taken. A punch runs **two passes** against that record, handing the judge a
-small search interface (`search`, `fetch_url`) and letting it drive its own research. Both tools
-are the same paid EXA call regardless of what they return, so there is no cheaper tier to prefer —
-the judge is told to try a targeted query against a vendor's own docs or changelog first, since
+small search interface (`search`, `fetch_url`) and letting it drive its own research. Neither tool
+is free, and there is no cheaper tier to prefer between them — the judge is told to try a targeted
+query against a vendor's own docs or changelog first, since
 that usually settles a claim in fewer calls than a broad web search does. **There is no cost cap**
 — the judge decides how much research a decision needs, the same way the original decision was
 researched.

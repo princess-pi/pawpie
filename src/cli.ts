@@ -7,6 +7,7 @@ import { buildListResult, refuseList, renderListText } from "./list.ts";
 import { createAdr } from "./new.ts";
 import {
   createSearchAdapterFromEnv,
+  normalizeId,
   refuseMissingId,
   refuseRecheckUsage,
   runRecheck,
@@ -21,7 +22,7 @@ const HELP = `pawpie — re-triage decision records (ADRs) when the world moves
 Usage:
   pawpie                          print this help (also --help / -h)
   pawpie list [path] [--json]     every ADR, oldest check first, never-checked at the top
-  pawpie new "<title>" [path]     next free number, a template with ## Problem and one date line
+  pawpie new "<title>" [path]     next free number, a template with ## Problem, ## Claims, one date line
   pawpie recheck <id> [path] [--json]   search the world; raise or stay quiet
   pawpie punch <id> [path] [--json]     alias for recheck
 
@@ -31,7 +32,8 @@ Usage:
 recheck/punch never edits an ADR. It searches with EXA (EXA_API_KEY in the
 environment) via a judge process — 'claude -p --model opus --effort medium'
 by default, overridable with PAWPIE_JUDGE_CMD — then appends one line to
-docs/adr/recheck.tsv. There is no cost cap; --json reports what the judge
+docs/adr/recheck.tsv for every run that reaches a verdict (a refusal appends
+nothing). There is no cost cap; --json reports what the judge
 actually used.
 
 Exit codes:
@@ -241,9 +243,11 @@ function runRecheckCommand(
     // runRecheck reports every expected failure (missing/unreadable ADR
     // directory included) as a RecheckRefusal; this only catches a genuine
     // race (e.g. the ADR file deleted between the scan and the read).
-    const message = `could not read ADR ${id}: ${(err as Error).message}`;
-    if (json) stdout(JSON.stringify({ schema: "pawpie-recheck@1", ok: false, reason: "adr-file-unreadable", id, message, exitCode: 2 }));
-    else stderr(`pawpie: ${message}`);
+    const normalizedId = normalizeId(id);
+    const message = `could not read ADR ${normalizedId}: ${(err as Error).message}`;
+    if (json) {
+      stdout(JSON.stringify({ schema: "pawpie-recheck@1", ok: false, reason: "adr-file-unreadable", id: normalizedId, message, exitCode: 2 }));
+    } else stderr(`pawpie: ${message}`);
     return 2;
   }
 

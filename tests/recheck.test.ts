@@ -19,7 +19,19 @@ const ALL_CLAIMS = [
   { text: RECORDED_CLAIM_TEXT["not-taken"], disposition: "not-taken" },
 ];
 
-const CLEAR_VERDICT = { outcome: "clear", raises: [], extractedClaims: [], checkedClaims: ALL_CLAIMS, unchecked: [] };
+// "new-options"/"changed-capabilities" need no pass-2 context and so are
+// always available; "new-make-abilities"/"changed-spec" need context a test
+// must opt into (see the `extraAvailable` param below).
+const ALWAYS_AVAILABLE_QUESTIONS = ["new-options", "changed-capabilities"];
+
+const CLEAR_VERDICT = {
+  outcome: "clear",
+  raises: [],
+  extractedClaims: [],
+  checkedClaims: ALL_CLAIMS,
+  checkedQuestions: ALWAYS_AVAILABLE_QUESTIONS,
+  unchecked: [],
+};
 
 function pass1Raise(disposition: "taken" | "not-taken") {
   return {
@@ -34,11 +46,15 @@ function pass1Raise(disposition: "taken" | "not-taken") {
     ],
     extractedClaims: [],
     checkedClaims: ALL_CLAIMS,
+    checkedQuestions: ALWAYS_AVAILABLE_QUESTIONS,
     unchecked: [],
   };
 }
 
-function pass2Raise(question: string) {
+// `extraAvailable` names any pass-2 context the caller has additionally
+// supplied this run (e.g. a README, so "changed-spec" is checkable too) —
+// checkedQuestions must equal exactly what's actually available.
+function pass2Raise(question: string, extraAvailable: string[] = []) {
   return {
     outcome: "raised",
     raises: [
@@ -51,6 +67,7 @@ function pass2Raise(question: string) {
     ],
     extractedClaims: [],
     checkedClaims: ALL_CLAIMS,
+    checkedQuestions: [...ALWAYS_AVAILABLE_QUESTIONS, ...extraAvailable],
     unchecked: [],
   };
 }
@@ -199,12 +216,11 @@ describe("pawpie recheck/punch — refusals", () => {
   test('a "clear" verdict carrying raises is judge-failed — a contradiction, never silently accepted', () => {
     const repo = makeTempRepo();
     seedAdr(repo);
-    const contradictory = {
-      outcome: "clear",
-      raises: [{ pass: 1, claim: { text: "x", disposition: "taken" }, note: "x", evidence: { source: "https://a", quote: "q" } }],
-      extractedClaims: [],
-      unchecked: [],
-    };
+    // Everything else about this verdict must be valid (a real recorded
+    // claim, matching preset evidence, complete checkedClaims/checkedQuestions)
+    // so the run actually reaches the outcome/raises contradiction check
+    // rather than failing earlier for an unrelated reason.
+    const contradictory = { ...pass1Raise("taken"), outcome: "clear" };
     const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(contradictory) });
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -244,6 +260,19 @@ describe("pawpie recheck/punch — refusals", () => {
     seedAdr(repo);
     const badFixture = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-bad-fixture-")), "bad.json");
     fs.writeFileSync(badFixture, "not json");
+    const env: NodeJS.ProcessEnv = { ...process.env, PAWPIE_SEARCH_FIXTURE: badFixture, PAWPIE_JUDGE_CMD: "node -e process.exit(1)" };
+    delete env.EXA_API_KEY;
+    const result = runRecheck(repo, "0001", { env });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("search-not-configured");
+  });
+
+  test("refuses with search-not-configured when a fixture result is missing a string url/text", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const badFixture = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-bad-fixture-")), "bad.json");
+    fs.writeFileSync(badFixture, JSON.stringify({ results: [{ title: "no url or text" }] }));
     const env: NodeJS.ProcessEnv = { ...process.env, PAWPIE_SEARCH_FIXTURE: badFixture, PAWPIE_JUDGE_CMD: "node -e process.exit(1)" };
     delete env.EXA_API_KEY;
     const result = runRecheck(repo, "0001", { env });
@@ -325,7 +354,8 @@ describe("pawpie recheck/punch — pass 2 (the four questions)", () => {
       seedAdr(repo);
       // "new-make-abilities" and "changed-spec" are only checkable, and so
       // only raisable, when their pass-2 input is actually available.
-      const env = fakeJudgeEnv(pass2Raise(question));
+      const extraAvailable = question === "new-make-abilities" || question === "changed-spec" ? [question] : [];
+      const env = fakeJudgeEnv(pass2Raise(question, extraAvailable));
       if (question === "new-make-abilities") {
         const capsPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-caps-")), "caps.txt");
         fs.writeFileSync(capsPath, "some skill\n");
@@ -369,6 +399,28 @@ describe("pawpie recheck/punch — pass 2 (the four questions)", () => {
     expect(result.outcome).toBe("clear");
     expect(result.unchecked).toEqual(["new-make-abilities", "changed-spec"]);
   });
+
+  test("a 'clear' verdict that never asked an available question is judge-failed, not accepted", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    // Only "new-options" is reported checked — "changed-capabilities" is
+    // always available too, so this claims pass 2 skipped a real question.
+    const verdict = { ...CLEAR_VERDICT, checkedQuestions: ["new-options"] };
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(verdict) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
+  });
+
+  test("an empty README counts as unavailable, not as checked-and-unchanged", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    fs.writeFileSync(path.join(repo, "README.md"), "   \n", "utf8");
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(CLEAR_VERDICT) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.unchecked).toContain("changed-spec");
+  });
 });
 
 describe("pawpie recheck/punch — claims: recorded vs. extracted", () => {
@@ -383,6 +435,7 @@ describe("pawpie recheck/punch — claims: recorded vs. extracted", () => {
       raises: [],
       extractedClaims: [{ text: "bun hardlinks from a shared cache", disposition: "taken" }],
       checkedClaims: [{ text: "bun hardlinks from a shared cache", disposition: "taken" }],
+      checkedQuestions: ALWAYS_AVAILABLE_QUESTIONS,
       unchecked: [],
     };
     const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(verdict) });
@@ -504,6 +557,7 @@ describe("pawpie recheck/punch — the sidecar", () => {
       ],
       extractedClaims: [],
       checkedClaims: ALL_CLAIMS,
+      checkedQuestions: ALWAYS_AVAILABLE_QUESTIONS,
       unchecked: [],
     };
     runRecheck(repo, "0001", { env: fakeJudgeEnv(verdict) });
@@ -569,7 +623,7 @@ describe("pawpie recheck/punch — evidence is checked, not trusted", () => {
     seedAdr(repo);
     fs.writeFileSync(path.join(repo, "README.md"), "this repo now requires node 24", "utf8");
     const verdict = {
-      ...pass2Raise("changed-spec"),
+      ...pass2Raise("changed-spec", ["changed-spec"]),
       raises: [
         {
           pass: 2,
@@ -590,13 +644,35 @@ describe("pawpie recheck/punch — evidence is checked, not trusted", () => {
     seedAdr(repo);
     fs.writeFileSync(path.join(repo, "README.md"), "this repo now requires node 24", "utf8");
     const verdict = {
-      ...pass2Raise("changed-spec"),
+      ...pass2Raise("changed-spec", ["changed-spec"]),
       raises: [
         {
           pass: 2,
           question: "changed-spec",
           note: "spec moved",
           evidence: { source: "README.md", quote: "a quote the README never had" },
+        },
+      ],
+    };
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(verdict) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
+  });
+
+  test("a README.md quote past the truncation cutoff is rejected — the judge never saw it", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const tail = "a fact that only appears after the cutoff";
+    fs.writeFileSync(path.join(repo, "README.md"), "x".repeat(20_000) + tail, "utf8");
+    const verdict = {
+      ...pass2Raise("changed-spec", ["changed-spec"]),
+      raises: [
+        {
+          pass: 2,
+          question: "changed-spec",
+          note: "spec moved",
+          evidence: { source: "README.md", quote: tail },
         },
       ],
     };
