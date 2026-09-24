@@ -23,12 +23,9 @@ export function writeSidecar(repoPath: string, lines: string[]): void {
 }
 
 // The URLs/quotes every existing fakeJudgeEnv-based test's canned verdict
-// cites as evidence — a fake judge never starts the real MCP server, so
-// there is no genuine evidence log for validateVerdict's URL-sourced check
-// to run against; this seeds one (via PAWPIE_TEST_PRESET_EVIDENCE, read only
-// by judge.ts's own test-only seam) so those raises validate the same way a
-// real run's would. A test citing a URL not covered here needs its own
-// `evidence` argument.
+// cites as evidence, seeded via PAWPIE_TEST_PRESET_EVIDENCE since a fake
+// judge never starts a real MCP server to produce one. A test citing a URL
+// not covered here needs its own `evidence` argument.
 const DEFAULT_PRESET_EVIDENCE = [
   { url: "https://example.com/evidence", text: "this changed" },
   { url: "https://a", text: "q1" },

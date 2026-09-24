@@ -138,16 +138,12 @@ function claimsFor(adrContent: string): Claim[] | null {
 }
 
 // Pass 2's "changed-spec" and "new-make-abilities" questions need context the
-// web cannot answer. The README is read unconditionally (every run, tests
-// included — there is no GitHub check, and none is needed for a local file);
-// open issues and agent capabilities have no live lookup yet in v0 and come
-// only from an explicitly configured fixture path. Missing input reaches the
-// judge as UNAVAILABLE. Only ENOENT on the README path is read that way,
-// since a repo with no README at all is an ordinary, expected case. Any
-// other read failure — an explicitly set path that can't be read, or a
-// README that exists but genuinely can't be read (EACCES, EISDIR) — is a
-// misconfiguration, not "unavailable": it propagates, and runRecheck turns
-// it into a pass2-context-unreadable refusal instead of a silent null.
+// web cannot answer: the README (read unconditionally, since no README at
+// all is ordinary), plus open issues and agent capabilities from an
+// explicitly configured fixture path (no live lookup yet in v0). Missing
+// input reaches the judge as UNAVAILABLE — but a read failure other than the
+// README's ENOENT is a misconfiguration, not "unavailable", and propagates
+// into runRecheck's pass2-context-unreadable refusal instead of a silent null.
 function gatherPass2Context(repoPath: string, env: NodeJS.ProcessEnv): Pass2Context {
   let readme: string | null = null;
   try {
@@ -163,10 +159,8 @@ function gatherPass2Context(repoPath: string, env: NodeJS.ProcessEnv): Pass2Cont
   return { readme, openIssues, agentCapabilities };
 }
 
-// Chooses which search backend the spawned `__mcp-serve` child should use.
-// `recheck.ts` itself still imports search-adapter.ts (createSearchAdapterFromEnv
-// below is what `__mcp-serve` calls, in that separate process) — this
-// function only decides which env vars to forward to that child.
+// Decides which env vars to forward to the spawned `__mcp-serve` child;
+// createSearchAdapterFromEnv (below) is what that separate process calls.
 function searchAdapterEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   if (env.PAWPIE_SEARCH_FIXTURE) {
     return { PAWPIE_SEARCH_ADAPTER: "fixture", PAWPIE_SEARCH_FIXTURE: env.PAWPIE_SEARCH_FIXTURE };

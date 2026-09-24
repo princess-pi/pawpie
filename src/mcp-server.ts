@@ -155,10 +155,9 @@ export function runMcpStdioServer(adapter: SearchAdapter, countsFile?: string, e
           }
         }
         if (evidenceFile) {
-          // Written every request, even as `[]` — judge.ts treats a missing
-          // file (the server never started) the same as an empty one (it
-          // started but returned nothing): either way there is nothing to
-          // check a URL-sourced raise against.
+          // Written every request, even as `[]` — a client that starts this
+          // server and calls no tool must produce a real (empty) log, not a
+          // missing file indistinguishable from "never started".
           try {
             fs.writeFileSync(evidenceFile, JSON.stringify(evidence));
           } catch {

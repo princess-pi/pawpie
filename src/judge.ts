@@ -217,15 +217,10 @@ function pass2ArtifactText(source: string, pass2: Pass2Context): string | null {
   return null;
 }
 
-// `recordedClaims` is what pass 1 was actually handed: the parsed
-// `## Claims` list, or null when the judge was told to extract its own.
-// `pass2` is what pass 2 was actually given, used to reject a raise the
-// judge could not honestly have evidence for and to force-report a question
-// as unchecked regardless of what the judge itself claims. `evidenceLog` is
-// every URL/text the search tools actually returned this run — always an
-// array, `[]` both when the MCP server never started and when it started but
-// returned nothing, since either way there is nothing to check a URL-sourced
-// raise against and it must be rejected the same way in both cases.
+// `recordedClaims` is the parsed `## Claims` list, or null when the judge
+// was told to extract its own. `evidenceLog` is every URL/text the search
+// tools actually returned this run (see runJudge for why it's always an
+// array, never null).
 function validateVerdict(
   doc: unknown,
   recordedClaims: Claim[] | null,
@@ -390,16 +385,10 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
     const pass2: Pass2Context = opts.pass2 ?? { readme: null, openIssues: null, agentCapabilities: null };
     const prompt = buildPrompt(adrId, adrContent, opts.claims ?? null, pass2);
 
-    // Test-only seam: a fake judge (tests/support.ts's fakeJudgeEnv) prints a
-    // canned verdict without ever spawning __mcp-serve, so no real evidence
-    // file exists for validateVerdict to check web-sourced evidence against.
-    // Pre-seeding it here lets a test assert a URL-sourced raise the same way
-    // production evidence-checking would — never read from PAWPIE_JUDGE_CMD
-    // itself, which stays a real, unmodified CLI invocation. Gated on
-    // PAWPIE_SEARCH_FIXTURE (test/fixture mode) too, so a leaked
-    // PAWPIE_TEST_PRESET_EVIDENCE has no effect on a real, EXA-backed run —
-    // the same shape searchAdapterEnv already uses to keep a real run from
-    // silently using the fixture backend.
+    // Test-only seam: a fake judge never spawns __mcp-serve, so this seeds
+    // the evidence file it would otherwise have written. Gated on
+    // PAWPIE_SEARCH_FIXTURE too, so a leaked PAWPIE_TEST_PRESET_EVIDENCE
+    // cannot disable evidence checking on a real, EXA-backed run.
     if (env.PAWPIE_TEST_PRESET_EVIDENCE && env.PAWPIE_SEARCH_FIXTURE) {
       fs.writeFileSync(evidenceFile, env.PAWPIE_TEST_PRESET_EVIDENCE);
     }
@@ -428,10 +417,9 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
     }
     const stdout = child.stdout ?? "";
 
-    // Missing or malformed collapses to `[]`, the same as a server that
-    // started and genuinely returned nothing — either way there is nothing
-    // to check a URL-sourced raise against, so it must be rejected, not
-    // waved through because the log "wasn't there to check".
+    // A missing/malformed file collapses to `[]`, same as a server that
+    // started and returned nothing — either way a URL-sourced raise has
+    // nothing to check against and must be rejected, not waved through.
     let evidenceLog: EvidenceEntry[] = [];
     try {
       const parsed: unknown = JSON.parse(fs.readFileSync(evidenceFile, "utf8"));
@@ -439,7 +427,7 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
         evidenceLog = parsed as EvidenceEntry[];
       }
     } catch {
-      // Missing/malformed — see above.
+      // See above.
     }
 
     const verdict = validateVerdict(extractJson(stdout), opts.claims ?? null, pass2, evidenceLog);
@@ -464,13 +452,9 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
           judgeCalls: 1,
         };
       }
-      // A present-but-malformed counts file is treated the same as a
-      // missing one — null, unknown — rather than trusting a partial shape.
+      // A malformed counts file is treated the same as a missing one.
     } catch {
-      // The counts file is missing or unreadable — the judge command never
-      // started the MCP search server at all (a server that starts and
-      // merely never calls a tool still writes a verified 0, above). Usage
-      // then honestly reports unknown (null) rather than a false zero.
+      // Missing/malformed — see JudgeUsage's null semantics above.
     }
 
     return { verdict, usage };
