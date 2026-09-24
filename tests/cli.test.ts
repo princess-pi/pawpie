@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { run } from "../src/cli.ts";
-import { captured, makeTempRepo, writeAdrFile, writeSidecar } from "./support.ts";
+import { captured, fakeJudgeEnv, makeTempRepo, writeAdrFile, writeSidecar } from "./support.ts";
 
 describe("pawpie cli", () => {
   test("no args prints help, exit 0", () => {
@@ -230,6 +230,35 @@ describe("pawpie cli", () => {
       expect(c.err.join("\n")).toContain("fails its own checks");
     });
   }
+
+  test("plain-text 'clear' output shows a usage caveat instead of reading as a fully researched run", () => {
+    const repo = makeTempRepo();
+    writeAdrFile(
+      repo,
+      "0001-a.md",
+      "# 0001. A\n\n- **Date:** 2026-01-01\n\n## Problem\n\nx\n\n## Claims\n\n- [taken] y — https://a\n",
+    );
+    const verdict = { outcome: "clear", raises: [], extractedClaims: [], checkedClaims: [{ text: "y", disposition: "taken" }], checkedQuestions: ["new-options", "changed-capabilities"], unchecked: [] };
+    const fakeEnv = fakeJudgeEnv(verdict);
+    const savedEnv: Record<string, string | undefined> = {};
+    for (const key of Object.keys(fakeEnv)) {
+      if (!(key in process.env) || process.env[key] !== fakeEnv[key]) savedEnv[key] = process.env[key];
+      process.env[key] = fakeEnv[key];
+    }
+    try {
+      const c = captured();
+      const code = run(["recheck", "0001", repo], c.stdout, c.stderr);
+      expect(code).toBe(0);
+      const text = c.out.join("\n");
+      expect(text).toContain("0001: clear");
+      expect(text).toContain("usage unknown");
+    } finally {
+      for (const [key, value] of Object.entries(savedEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
 
   const bundle = path.resolve(import.meta.dirname, "..", "bin", "pawpie.mjs");
   // `bun run build` produces this; reported as skipped (not silently passed)

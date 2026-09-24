@@ -11,6 +11,7 @@ import {
   refuseMissingId,
   refuseRecheckUsage,
   runRecheck,
+  usageCaveat,
   type RecheckResult,
   type RecheckRefusal,
 } from "./recheck.ts";
@@ -189,7 +190,7 @@ function runNew(args: string[], stdout: (s: string) => void, stderr: (s: string)
 
 function renderVerdictText(
   id: string,
-  verdict: Pick<RecheckResult, "outcome" | "raises" | "unchecked">,
+  verdict: Pick<RecheckResult, "outcome" | "raises" | "unchecked" | "usage">,
   stdout: (s: string) => void,
 ): void {
   if (verdict.outcome === "clear") stdout(`${id}: clear`);
@@ -206,6 +207,11 @@ function renderVerdictText(
   if (verdict.unchecked.length > 0) {
     stdout(`  unchecked: ${verdict.unchecked.join(", ")} (missing repo/agent context)`);
   }
+  // Same reason: a "clear" whose research never actually happened (a bad
+  // EXA key, the judge's tools denied) must not print exactly like a fully
+  // researched one — the sidecar note already carries this caveat.
+  const caveat = usageCaveat(verdict.usage);
+  if (caveat) stdout(`  ${caveat}`);
 }
 
 function runRecheckCommand(

@@ -108,7 +108,7 @@ function appendSidecarLine(adrDir: string, id: string, outcome: "raised" | "clea
 // indistinguishable from a fully researched one, so a run where research
 // plainly did not happen (usage unknown, zero calls attempted, or every
 // attempted call failed) says so in the row itself.
-function usageCaveat(usage: JudgeUsage): string | null {
+export function usageCaveat(usage: JudgeUsage): string | null {
   if (usage.searches === null || usage.fetches === null) return "usage unknown";
   const attempted = usage.searches + (usage.searchErrors ?? 0) + usage.fetches + (usage.fetchErrors ?? 0);
   const failed = (usage.searchErrors ?? 0) + (usage.fetchErrors ?? 0);
