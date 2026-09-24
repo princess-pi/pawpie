@@ -32,7 +32,10 @@ there about as often as you commit.
 ## Stack
 
 - Bun + TypeScript, bundled with `bun build` to a single `bin/pawpie.mjs` that runs on stock node.
-- Typecheck with TypeScript 7's native compiler (`tsc --noEmit`).
+- Typecheck with TypeScript 7's native compiler: `bun run typecheck` runs it twice, once over
+  `src/` alone (`tsc --noEmit`, deliberately excluding `bun-types` so a stray `Bun.*` global fails
+  here instead of at a consumer's `npx`) and once over `src/` + `tests/` together
+  (`tsconfig.test.json`, which does allow `bun-types` for `bun:test`).
 - Tests with `bun test`.
 
 ## Commands

@@ -51,6 +51,10 @@ describe("pawpie list", () => {
     expect(result.scanned).toBe(3);
     expect(result.adrs).toHaveLength(3);
     expect(result.exitCode).toBe(0);
+    // The --json contract must carry the heuristic's caveat too, not just
+    // the text renderer — a JSON caller reading problemWarning: false has
+    // otherwise no signal that the check can miss a match.
+    expect(result.problemWarningCaveat.length).toBeGreaterThan(0);
 
     const byId = Object.fromEntries(result.adrs.map((a) => [a.id, a]));
     expect(byId["0001"].date).toBe("2026-01-05");
@@ -95,18 +99,40 @@ describe("pawpie list", () => {
     expect(result.adrs.every((a) => a.error?.kind === "duplicate-number")).toBe(true);
   });
 
-  test("the chosen option inside ## Problem warns and leaves the exit code unchanged", () => {
+  test("the chosen option's own name (4+ letters) reused in ## Problem warns and leaves the exit code unchanged", () => {
     const repo = makeTempRepo();
+    // "webpack" is the only word of 4+ letters shared between title and
+    // Problem — this isolates the option-name match from any other reused
+    // word, unlike a fixture where a generic domain word (e.g. "toolchain")
+    // would also trigger the warning on its own.
     writeAdrFile(
       repo,
-      "0001-use-bun.md",
-      "# 0001. Use bun for the toolchain\n\n- **Date:** 2026-01-01\n\n## Problem\n\nshould we use bun for the toolchain\n\n## Decision\n",
+      "0001-choose-webpack.md",
+      "# 0001. Choose webpack\n\n- **Date:** 2026-01-01\n\n## Problem\n\nwhich bundler should this project use — webpack or something else\n\n## Decision\n",
     );
 
     const result = buildListResult(repo);
 
     expect(result.exitCode).toBe(0);
     expect(result.adrs[0].problemWarning).toBe(true);
+  });
+
+  test("a short option name (under 4 letters), even reused verbatim in ## Problem, does not warn", () => {
+    const repo = makeTempRepo();
+    // "bun" (3 letters) is the chosen option, reused verbatim in the Problem
+    // text below — but it is shorter than the heuristic's 4-letter floor, so
+    // it passes with no warning. Every word of 4+ letters in the title
+    // ("toolchain") is absent from the Problem text.
+    writeAdrFile(
+      repo,
+      "0001-use-bun.md",
+      "# 0001. Use bun for the toolchain\n\n- **Date:** 2026-01-01\n\n## Problem\n\nwhich build tool, bun or otherwise, should this project standardize on\n\n## Decision\n",
+    );
+
+    const result = buildListResult(repo);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.adrs[0].problemWarning).toBe(false);
   });
 
   test("order: never-checked sorts above checked, older check sorts above newer", () => {

@@ -13,11 +13,15 @@ export interface ListedAdr {
   error: { kind: string; message: string } | null;
 }
 
+export const PROBLEM_WARNING_CAVEAT =
+  "heuristic, not exhaustive — only compares title words of 4+ letters against the Problem text; a short option name can pass unnoticed";
+
 export interface ListResult {
   schema: "pawpie-list@1";
   ok: true;
   path: string;
   scanned: number;
+  problemWarningCaveat: string;
   adrs: ListedAdr[];
   exitCode: 0 | 3;
 }
@@ -69,13 +73,21 @@ export function buildListResult(repoPath: string): ListResult {
 
   const exitCode = listed.some((a) => a.error !== null) ? 3 : 0;
 
-  return { schema: "pawpie-list@1", ok: true, path: repoPath, scanned, adrs: listed, exitCode };
+  return {
+    schema: "pawpie-list@1",
+    ok: true,
+    path: repoPath,
+    scanned,
+    problemWarningCaveat: PROBLEM_WARNING_CAVEAT,
+    adrs: listed,
+    exitCode,
+  };
 }
 
 export interface ListRefusal {
   schema: "pawpie-list@1";
   ok: false;
-  reason: "no-adr-directory" | "unreadable";
+  reason: "no-adr-directory" | "unreadable" | "usage-error";
   path: string;
   message: string;
   exitCode: 2;

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { ReadFailure } from "./errors.ts";
 import { buildListResult, refuseList, renderListText } from "./list.ts";
 import { createAdr } from "./new.ts";
-import { refuseRecheck } from "./recheck.ts";
+import { refuseRecheck, refuseRecheckUsage } from "./recheck.ts";
 
 const HELP = `pawpie — re-triage decision records (ADRs) when the world moves
 
@@ -22,10 +22,11 @@ Usage:
 Exit codes:
   0   ran; nothing raised (also help)
   1   sidecar unwritable (reserved for recheck/punch — not reachable yet)
-  2   usage error: unknown command, unknown flag, an unexpected extra
-      argument, a missing title for 'new', no ADR directory or an
-      unreadable ADR directory/sidecar for 'list', an unwritable ADR
-      directory for 'new' (or an unreadable one, reported the same way),
+  2   usage error: unknown command, unknown flag (any '-' or '--' token
+      the command doesn't take), an unexpected extra argument, a missing
+      title for 'new', no ADR directory or an unreadable ADR
+      directory/sidecar for 'list', an unwritable ADR directory for 'new'
+      (or an unreadable ADR directory/sidecar, naming that path instead),
       or recheck/punch (always, id or not)
   3   an ADR is present and checks nothing: no ## Problem, no date in any
       known shape, unreadable, or a duplicate number — also returned by
@@ -33,7 +34,7 @@ Exit codes:
   10  at least one ADR raised (Step D, not built yet)
 `;
 
-type Schema = "pawpie@1" | "pawpie-list@1" | "pawpie-recheck@1" | null;
+type Schema = "pawpie@1" | null;
 
 function splitFlags(
   args: string[],
@@ -43,13 +44,15 @@ function splitFlags(
   const unknownFlags: string[] = [];
   const flags = new Set<string>();
   for (const arg of args) {
-    if (!arg.startsWith("--")) positionals.push(arg);
+    if (!arg.startsWith("-") || arg === "-") positionals.push(arg);
     else if (allowed.has(arg)) flags.add(arg);
     else unknownFlags.push(arg);
   }
   return { flags, positionals, unknownFlags };
 }
 
+// For schemas with no typed refusal shape of their own (the top-level
+// "pawpie@1" usage error, and `new`, which has no --json contract at all).
 function usageError(
   message: string,
   schema: Schema,
@@ -68,14 +71,19 @@ function usageError(
 function runList(args: string[], stdout: (s: string) => void, stderr: (s: string) => void): number {
   const { flags, positionals, unknownFlags } = splitFlags(args, new Set(["--json"]));
   const json = flags.has("--json");
-  if (unknownFlags.length > 0) {
-    return usageError(`unknown flag "${unknownFlags[0]}"`, "pawpie-list@1", json, stdout, stderr);
-  }
-  if (positionals.length > 1) {
-    return usageError(`unexpected argument "${positionals[1]}"`, "pawpie-list@1", json, stdout, stderr);
+  const repoPath = positionals[0] ?? ".";
+
+  if (unknownFlags.length > 0 || positionals.length > 1) {
+    const message =
+      unknownFlags.length > 0
+        ? `unknown flag "${unknownFlags[0]}"`
+        : `unexpected argument "${positionals[1]}"`;
+    const refusal = refuseList(repoPath, "usage-error", message);
+    if (json) stdout(JSON.stringify(refusal));
+    else stderr(`pawpie: ${message}`);
+    return refusal.exitCode;
   }
 
-  const repoPath = positionals[0] ?? ".";
   const adrDir = path.join(repoPath, "docs", "adr");
 
   let stat: fs.Stats | undefined;
@@ -156,14 +164,19 @@ function runRecheck(
 ): number {
   const { flags, positionals, unknownFlags } = splitFlags(args, new Set(["--json"]));
   const json = flags.has("--json");
-  if (unknownFlags.length > 0) {
-    return usageError(`unknown flag "${unknownFlags[0]}"`, "pawpie-recheck@1", json, stdout, stderr);
-  }
-  if (positionals.length > 2) {
-    return usageError(`unexpected argument "${positionals[2]}"`, "pawpie-recheck@1", json, stdout, stderr);
+  const id = positionals[0] ?? null;
+
+  if (unknownFlags.length > 0 || positionals.length > 2) {
+    const message =
+      unknownFlags.length > 0
+        ? `unknown flag "${unknownFlags[0]}"`
+        : `unexpected argument "${positionals[2]}"`;
+    const refusal = refuseRecheckUsage(id, message);
+    if (json) stdout(JSON.stringify(refusal));
+    else stderr(`pawpie: ${message}`);
+    return refusal.exitCode;
   }
 
-  const id = positionals[0] ?? null;
   const refusal = refuseRecheck(id);
   if (json) {
     stdout(JSON.stringify(refusal));

@@ -1,10 +1,14 @@
 export interface RecheckRefusal {
   schema: "pawpie-recheck@1";
   ok: false;
-  reason: "not-built-yet" | "missing-id";
+  reason: "not-built-yet" | "missing-id" | "usage-error";
   id: string | null;
   message: string;
   exitCode: 2;
+}
+
+export function refuseRecheckUsage(id: string | null, message: string): RecheckRefusal {
+  return { schema: "pawpie-recheck@1", ok: false, reason: "usage-error", id, message, exitCode: 2 };
 }
 
 export function refuseRecheck(id: string | null): RecheckRefusal {

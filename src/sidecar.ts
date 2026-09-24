@@ -17,6 +17,7 @@ export function readSidecar(sidecarPath: string): CheckEntry[] {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw err;
   }
+  if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
   const entries: CheckEntry[] = [];
   for (const line of content.split("\n")) {
     if (line.trim() === "") continue;

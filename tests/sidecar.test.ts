@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
 import { lastCheckByAdr, readSidecar } from "../src/sidecar.ts";
 import { adrDirOf, makeTempRepo, writeSidecar } from "./support.ts";
 
@@ -15,6 +16,16 @@ describe("sidecar", () => {
     writeSidecar(repo, ["00004\t2026-01-01\tclear\tnote"]);
     const entries = readSidecar(`${adrDirOf(repo)}/recheck.tsv`);
     expect(entries[0].adrId).toBe("0004");
+  });
+
+  test("a UTF-8 BOM on the file does not detach the first line's id", () => {
+    const repo = makeTempRepo();
+    writeSidecar(repo, ["0001\t2026-01-01\tclear\tnote"]);
+    const sidecarPath = `${adrDirOf(repo)}/recheck.tsv`;
+    fs.writeFileSync(sidecarPath, "﻿" + fs.readFileSync(sidecarPath, "utf8"));
+
+    const entries = readSidecar(sidecarPath);
+    expect(entries[0].adrId).toBe("0001");
   });
 
   test("a same-day tie goes to the later line", () => {

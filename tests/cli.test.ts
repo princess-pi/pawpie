@@ -73,8 +73,11 @@ describe("pawpie cli", () => {
     }
   });
 
-  test("an unreadable ADR directory is a distinct refusal, not a silent empty list", () => {
-    if (process.getuid && process.getuid() === 0) return; // root bypasses permission bits
+  // root bypasses permission bits, so these three report as SKIPPED under
+  // root rather than passing without having asserted anything.
+  const isRoot = process.getuid !== undefined && process.getuid() === 0;
+
+  test.skipIf(isRoot)("an unreadable ADR directory is a distinct refusal, not a silent empty list", () => {
     const repo = makeTempRepo();
     writeAdrFile(repo, "0001-a.md", "# 0001. A\n\n- **Date:** 2026-01-01\n\n## Problem\n\nx\n");
     const adrDir = path.join(repo, "docs", "adr");
@@ -109,8 +112,7 @@ describe("pawpie cli", () => {
     expect(doc.reason).toBe("usage-error");
   });
 
-  test("a sidecar read failure names recheck.tsv, not the ADR directory", () => {
-    if (process.getuid && process.getuid() === 0) return; // root bypasses permission bits
+  test.skipIf(isRoot)("a sidecar read failure names recheck.tsv, not the ADR directory", () => {
     const repo = makeTempRepo();
     writeAdrFile(repo, "0001-a.md", "# 0001. A\n\n- **Date:** 2026-01-01\n\n## Problem\n\nx\n");
     writeSidecar(repo, ["0001\t2026-01-01\tclear\tok"]);
@@ -127,8 +129,7 @@ describe("pawpie cli", () => {
     expect(doc.message).toContain("recheck.tsv");
   });
 
-  test("an inaccessible parent directory is 'unreadable', not 'no ADR directory'", () => {
-    if (process.getuid && process.getuid() === 0) return; // root bypasses permission bits
+  test.skipIf(isRoot)("an inaccessible parent directory is 'unreadable', not 'no ADR directory'", () => {
     const repo = makeTempRepo();
     writeAdrFile(repo, "0001-a.md", "# 0001. A\n\n- **Date:** 2026-01-01\n\n## Problem\n\nx\n");
     const docsDir = path.join(repo, "docs");
@@ -215,10 +216,8 @@ describe("pawpie cli", () => {
       const link = path.join(linkDir, "pawpie");
       fs.symlinkSync(bundle, link);
 
-      // The published artifact must run on stock node (Node Toolchain
-      // Standard), and this bug is specific to Node's
-      // argv[1]-vs-import.meta.url symlink handling — `process.execPath`
-      // under `bun test` is bun itself, which does not reproduce it.
+      // `process.execPath` under `bun test` is bun itself, so it would not
+      // reproduce a Node-specific argv[1]-vs-import.meta.url symlink defect.
       const result = spawnSync("node", [link, "--help"], { encoding: "utf8" });
 
       expect(result.status).toBe(0);

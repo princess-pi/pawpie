@@ -49,7 +49,8 @@ npx --yes @princess-pi/pawpie <command>
 | `pawpie recheck <id> [path] [--json]` (alias `pawpie punch <id> [path] [--json]`) | not built yet — refuses, exit 2 | — |
 
 `path` defaults to the current directory. ADRs live under `<path>/docs/adr/`. `list` refuses when
-that directory is missing; `new` creates it. An unrecognized `--flag`, or an unexpected extra
+that directory is missing; `new` creates it. An unrecognized flag — any `-` or `--` token the
+command doesn't take, including a bare `-h`/`-v` after the subcommand — or an unexpected extra
 argument, is a usage error (exit 2) rather than being read as a positional argument.
 
 ## v0 known limits
@@ -72,7 +73,9 @@ argument, is a usage error (exit 2) rather than being read as a positional argum
   refusing.
 - **A malformed line in `recheck.tsv`** — fewer than four tab-separated columns, or an `outcome`
   outside `clear`/`raised`/`skipped` — is skipped rather than refused. Extra columns past the
-  fourth are folded into the note, and the date column itself is not validated.
+  fourth are folded into the note, and the date column itself is not validated. A skipped line is
+  invisible to the gap-filling exclusion above too: a malformed history line for `0002` does not
+  keep `0002` excluded.
 - **A sidecar `<adr_id>` is normalized** the same way a scanned file's id is: `4` and `00004` both
   match ADR `0004`.
 
@@ -106,13 +109,15 @@ skipped, not refused.
 
 `list` emits one record per run on stdout under `--json`, on success and on refusal, schema
 `pawpie-list@1`. `recheck`/`punch` emit schema `pawpie-recheck@1`. Callers dispatch on the record's
-fields, never on the exit code alone.
+fields, never on the exit code alone. A success record carries `problemWarningCaveat`, the same
+heuristic caveat from *The one writing rule* above, so a `--json` caller sees per-ADR
+`problemWarning: false` is not a guarantee.
 
 | exit | meaning |
 |---|---|
 | 0 | ran; nothing raised (also help) |
 | 1 | sidecar unwritable (reserved for `recheck`/`punch` — not reachable until Step D) |
-| 2 | usage error: an unknown command, an unknown flag, an unexpected extra argument, a missing title for `new`, no ADR directory or an unreadable ADR directory/sidecar for `list`, an unwritable ADR directory for `new` (or an unreadable one, reported the same way), or `recheck`/`punch` (always — id or not) |
+| 2 | usage error: an unknown command, an unknown flag, an unexpected extra argument, a missing title for `new`, no ADR directory or an unreadable ADR directory/sidecar for `list`, an unwritable ADR directory for `new` (or an unreadable ADR directory/sidecar, reported by naming that path instead), or `recheck`/`punch` (always — id or not) |
 | 3 | an ADR is present and checks nothing: no `## Problem`, no date in any known shape, unreadable, or a duplicate number — also returned by `new` when the directory already has a duplicate number |
 | 10 | at least one ADR raised (Step D, not built yet) |
 
