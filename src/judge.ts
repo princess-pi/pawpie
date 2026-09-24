@@ -42,8 +42,12 @@ export interface JudgeVerdict {
 }
 
 export interface JudgeUsage {
-  searches: number;
-  fetches: number;
+  // null means unknown — the counts file was never written (the search
+  // server never started or never got a request) or came back malformed —
+  // never reported as 0, which would misrepresent an unknown count as a
+  // verified "no tool calls happened".
+  searches: number | null;
+  fetches: number | null;
   judgeCalls: number;
 }
 
@@ -175,8 +179,14 @@ function validateVerdict(doc: unknown): JudgeVerdict {
       throw new JudgeError(`raise[${i}] has invalid "pass": ${JSON.stringify(raise.pass)}`);
     }
     const evidence = raise.evidence as Record<string, unknown> | undefined;
-    if (!evidence || typeof evidence.source !== "string" || typeof evidence.quote !== "string") {
-      throw new JudgeError(`raise[${i}] is missing evidence.source or evidence.quote`);
+    if (
+      !evidence ||
+      typeof evidence.source !== "string" ||
+      evidence.source.trim().length === 0 ||
+      typeof evidence.quote !== "string" ||
+      evidence.quote.trim().length === 0
+    ) {
+      throw new JudgeError(`raise[${i}] is missing a non-empty evidence.source or evidence.quote`);
     }
     const note = typeof raise.note === "string" ? raise.note : "";
     if (raise.pass === 1) {
@@ -195,6 +205,9 @@ function validateVerdict(doc: unknown): JudgeVerdict {
   });
   if (d.outcome === "raised" && raises.length === 0) {
     throw new JudgeError('judge verdict says "raised" but carries no raises');
+  }
+  if (d.outcome === "clear" && raises.length > 0) {
+    throw new JudgeError('judge verdict says "clear" but carries raises — a contradiction');
   }
 
   const extractedClaims = Array.isArray(d.extractedClaims)
@@ -258,14 +271,24 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
 
     const verdict = validateVerdict(extractJson(stdout));
 
-    let usage: JudgeUsage = { searches: 0, fetches: 0, judgeCalls: 1 };
+    let usage: JudgeUsage = { searches: null, fetches: null, judgeCalls: 1 };
     try {
-      const counts = JSON.parse(fs.readFileSync(countsFile, "utf8")) as { searches: number; fetches: number };
-      usage = { ...counts, judgeCalls: 1 };
+      const counts: unknown = JSON.parse(fs.readFileSync(countsFile, "utf8"));
+      if (
+        typeof counts === "object" &&
+        counts !== null &&
+        Number.isInteger((counts as Record<string, unknown>).searches) &&
+        Number.isInteger((counts as Record<string, unknown>).fetches)
+      ) {
+        const c = counts as { searches: number; fetches: number };
+        usage = { searches: c.searches, fetches: c.fetches, judgeCalls: 1 };
+      }
+      // A present-but-malformed counts file is treated the same as a
+      // missing one — null, unknown — rather than trusting a partial shape.
     } catch {
-      // The judge may have answered with no tool calls (or the MCP server
-      // never started under a judge command with no MCP support) — usage
-      // then honestly reports zero rather than failing the whole run over it.
+      // The judge may have answered with no tool calls, or with a judge
+      // command that never started the MCP search server — usage then
+      // honestly reports unknown (null) rather than a verified zero.
     }
 
     return { verdict, usage };

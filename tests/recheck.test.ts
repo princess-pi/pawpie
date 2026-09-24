@@ -155,6 +155,63 @@ describe("pawpie recheck/punch — refusals", () => {
     if (result.ok) return;
     expect(result.reason).toBe("judge-failed");
   });
+
+  test('a "clear" verdict carrying raises is judge-failed — a contradiction, never silently accepted', () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const contradictory = {
+      outcome: "clear",
+      raises: [{ pass: 1, claim: { text: "x", disposition: "taken" }, note: "x", evidence: { source: "https://a", quote: "q" } }],
+      extractedClaims: [],
+      unchecked: [],
+    };
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(contradictory) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
+  });
+
+  test("a raise with empty evidence strings is judge-failed rather than accepted as real evidence", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const badVerdict = {
+      outcome: "raised",
+      raises: [{ pass: 1, claim: { text: "x", disposition: "taken" }, note: "x", evidence: { source: "", quote: "" } }],
+      extractedClaims: [],
+      unchecked: [],
+    };
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(badVerdict) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
+  });
+
+  test("refuses with no search backend configured, before ever invoking the judge", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const env = { ...process.env };
+    delete env.EXA_API_KEY;
+    delete env.PAWPIE_SEARCH_FIXTURE;
+    const result = runRecheck(repo, "0001", { env: { ...env, PAWPIE_JUDGE_CMD: "node -e process.exit(1)" } });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("search-not-configured");
+    expect(result.exitCode).toBe(2);
+  });
+
+  test("refuses with a distinct reason when docs/adr/ itself is unreadable", () => {
+    const isRoot = process.getuid !== undefined && process.getuid() === 0;
+    if (isRoot) return; // root bypasses permission bits
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    fs.chmodSync(adrDirOf(repo), 0o000);
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(CLEAR_VERDICT) });
+    fs.chmodSync(adrDirOf(repo), 0o755);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("adr-dir-unreadable");
+    expect(result.exitCode).toBe(2);
+  });
 });
 
 describe("pawpie recheck/punch — pass 1 (the recorded claims)", () => {
@@ -254,6 +311,19 @@ describe("pawpie recheck/punch — claims: recorded vs. extracted", () => {
 });
 
 describe("pawpie recheck/punch — the sidecar", () => {
+  test("a row appended to a sidecar with no trailing newline never merges into the prior row", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const sidecarPath = path.join(adrDirOf(repo), "recheck.tsv");
+    fs.writeFileSync(sidecarPath, "0001\t2026-01-01\tclear\tprior run, no trailing newline");
+
+    runRecheck(repo, "0001", { env: fakeJudgeEnv(CLEAR_VERDICT) });
+
+    const rows = fs.readFileSync(sidecarPath, "utf8").trim().split("\n");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toBe("0001\t2026-01-01\tclear\tprior run, no trailing newline");
+  });
+
   test("appends exactly one row per run, never edits the ADR itself", () => {
     const repo = makeTempRepo();
     seedAdr(repo);
@@ -294,12 +364,12 @@ describe("pawpie recheck/punch — the sidecar", () => {
     expect(note).toBe("pass1:taken found X; pass2:changed-capabilities price dropped");
   });
 
-  test("reports usage counts even when they are zero (a fake judge that calls no tools)", () => {
+  test("reports usage as unknown (null), never a false zero, for a judge that never calls its tools", () => {
     const repo = makeTempRepo();
     seedAdr(repo);
     const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(CLEAR_VERDICT) });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.usage).toEqual({ searches: 0, fetches: 0, judgeCalls: 1 });
+    expect(result.usage).toEqual({ searches: null, fetches: null, judgeCalls: 1 });
   });
 });

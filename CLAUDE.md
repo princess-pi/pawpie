@@ -30,9 +30,10 @@ there about as often as you commit.
 - **`recheck`/`punch` never edits an ADR and never re-decides.** It runs two passes (pass 1 iterates
   the `## Claims`, pass 2 asks four questions about `## Problem`), raises with evidence (a source
   and a quote) or stays quiet, and appends exactly one line to `docs/adr/recheck.tsv` per run.
-  Tests must never call the real EXA search backend or the real judge model — use
-  `PAWPIE_SEARCH_ADAPTER=fixture` / `PAWPIE_SEARCH_FIXTURE` and a fake `PAWPIE_JUDGE_CMD` (see
-  `tests/support.ts`'s `fakeJudgeEnv`).
+  Tests must never call the real EXA search backend or the real judge model — set
+  `PAWPIE_SEARCH_FIXTURE` (the parent process reads only this var; it derives
+  `PAWPIE_SEARCH_ADAPTER` itself when forwarding env to the spawned `__mcp-serve` child) and a fake
+  `PAWPIE_JUDGE_CMD` (see `tests/support.ts`'s `fakeJudgeEnv`).
 
 ## Stack
 
@@ -59,7 +60,7 @@ there about as often as you commit.
 - `src/adr.ts` — scans `docs/adr/`, parses dates in the three known shapes and the `## Claims`
   section (one line per claim, tagged `taken`/`not-taken` with its source), detects a missing
   `## Problem`, a missing date, and duplicate ADR numbers.
-- `src/sidecar.ts` — reads `docs/adr/recheck.tsv` (nothing writes it yet).
+- `src/sidecar.ts` — reads `docs/adr/recheck.tsv`; `recheck.ts` is what writes it.
 - `src/list.ts` — `pawpie list`: builds and sorts the `pawpie-list@1` record.
 - `src/new.ts` — `pawpie new`: next free ADR number, writes the template; refuses a
   newline-containing title (exit 2) before touching the filesystem.

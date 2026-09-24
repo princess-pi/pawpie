@@ -244,10 +244,12 @@ guarantee.
   `new-options` / `changed-capabilities` / `new-make-abilities` / `changed-spec`; both carry `note`
   and `evidence: {source, quote}`), `extractedClaims[]` (each `{text, disposition}`, populated only
   when the ADR carried no usable `## Claims`), `unchecked[]` (question ids pass 2 could not check),
-  `usage: {searches, fetches, judgeCalls}`, `exitCode` (0 clear, 10 raised).
+  `usage: {searches, fetches, judgeCalls}` (`searches`/`fetches` are `null`, never a false `0`, when
+  the count is genuinely unknown — the search server never started, or its counts file never
+  wrote), `exitCode` (0 clear, 10 raised).
 - **`ok: false`** — `id` (`null` when none was given), `message`, `exitCode` (2 or 1), and `reason`
-  of `missing-id` / `usage-error` / `adr-not-found` / `adr-invalid` (exit 2), or `judge-failed` /
-  `sidecar-unwritable` (exit 1).
+  of `missing-id` / `usage-error` / `adr-dir-unreadable` / `adr-not-found` / `adr-invalid` /
+  `search-not-configured` (exit 2), or `judge-failed` / `sidecar-unwritable` (exit 1).
 
 Two ADRs that tie on last-check date (or are both never-checked) sort by ADR id, numerically —
 `0010` after `0009`, not before it lexically.
@@ -260,7 +262,7 @@ title or sidecar date containing one comes through as `\u001b`, not a raw byte.
 |---|---|
 | 0 | ran; nothing raised (also help, and a `recheck`/`punch` outcome of `clear`) |
 | 1 | `recheck`/`punch`: the judge failed (nonzero exit or an unparseable/invalid verdict), or `recheck.tsv` could not be appended to |
-| 2 | usage error: an unknown command, an unknown flag, an unexpected extra argument, a missing or newline-containing title for `new`, no ADR directory or an unreadable ADR directory/sidecar for `list`, an unwritable ADR directory for `new` (or an unreadable ADR directory/sidecar, reported by naming that path instead), or `recheck`/`punch` with no id, an id that doesn't exist, or an ADR that already fails its own `list` checks |
+| 2 | usage error: an unknown command, an unknown flag, an unexpected extra argument, a missing or newline-containing title for `new`, no ADR directory or an unreadable ADR directory/sidecar for `list`, an unwritable ADR directory for `new` (or an unreadable ADR directory/sidecar, reported by naming that path instead), or `recheck`/`punch` with no id, an unreadable ADR directory, an id that doesn't exist, an ADR that already fails its own `list` checks, or no search backend configured (neither `EXA_API_KEY` nor `PAWPIE_SEARCH_FIXTURE`) |
 | 3 | an ADR is present and checks nothing: no `## Problem`, no date in any known shape, unreadable, or a duplicate number — also returned by `new` when the directory already has a duplicate number |
 | 10 | `recheck`/`punch` raised the decision for a human to triage |
 

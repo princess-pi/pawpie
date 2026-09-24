@@ -2,14 +2,21 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { extractClaimsSection, parseClaims, scanAdrDir, type Claim } from "./adr.ts";
 import { JudgeError, runJudge, type ClaimRef, type JudgeUsage, type Pass2Context, type Question, type Raise } from "./judge.ts";
-import { createExaAdapter, createFixtureAdapter, loadFixtureAdapter } from "./search-adapter.ts";
+import { createExaAdapter, loadFixtureAdapter } from "./search-adapter.ts";
 import type { SearchAdapter } from "./search-adapter.ts";
-import { ReadFailure } from "./errors.ts";
 
 export interface RecheckRefusal {
   schema: "pawpie-recheck@1";
   ok: false;
-  reason: "missing-id" | "usage-error" | "adr-not-found" | "adr-invalid" | "judge-failed" | "sidecar-unwritable";
+  reason:
+    | "missing-id"
+    | "usage-error"
+    | "adr-dir-unreadable"
+    | "adr-not-found"
+    | "adr-invalid"
+    | "search-not-configured"
+    | "judge-failed"
+    | "sidecar-unwritable";
   id: string | null;
   message: string;
   exitCode: 1 | 2;
@@ -50,7 +57,32 @@ function normalizeId(raw: string): string {
 function appendSidecarLine(adrDir: string, id: string, outcome: "raised" | "clear", note: string): void {
   const today = new Date().toISOString().slice(0, 10);
   const safeNote = note.replace(/[\t\r\n]/g, " ").trim();
-  fs.appendFileSync(path.join(adrDir, "recheck.tsv"), `${id}\t${today}\t${outcome}\t${safeNote}\n`, "utf8");
+  const sidecarPath = path.join(adrDir, "recheck.tsv");
+
+  // recheck.tsv is a committed, hand-editable file: it may not end in a
+  // newline. Gluing the new row onto that last line would corrupt it —
+  // either the reader skips the new row as malformed, or folds it into the
+  // prior row's note — so a leading newline is added whenever the existing
+  // content doesn't already end in one.
+  let needsLeadingNewline = false;
+  try {
+    const fd = fs.openSync(sidecarPath, "r");
+    try {
+      const size = fs.fstatSync(fd).size;
+      if (size > 0) {
+        const buf = Buffer.alloc(1);
+        fs.readSync(fd, buf, 0, 1, size - 1);
+        needsLeadingNewline = buf[0] !== 0x0a;
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+
+  const row = `${needsLeadingNewline ? "\n" : ""}${id}\t${today}\t${outcome}\t${safeNote}\n`;
+  fs.appendFileSync(sidecarPath, row, "utf8");
 }
 
 function noteFor(raises: Raise[]): string {
@@ -104,14 +136,28 @@ function gatherPass2Context(repoPath: string, env: NodeJS.ProcessEnv): Pass2Cont
   return { readme, openIssues, agentCapabilities };
 }
 
-// Chooses which search backend the spawned MCP server child should use, by
-// env var alone — this process never imports the adapter for a live judge
-// run, only forwards the choice down to `__mcp-serve`.
+// Chooses which search backend the spawned `__mcp-serve` child should use.
+// `recheck.ts` itself still imports search-adapter.ts (createSearchAdapterFromEnv
+// below is what `__mcp-serve` calls, in that separate process) — this
+// function only decides which env vars to forward to that child.
 function searchAdapterEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   if (env.PAWPIE_SEARCH_FIXTURE) {
     return { PAWPIE_SEARCH_ADAPTER: "fixture", PAWPIE_SEARCH_FIXTURE: env.PAWPIE_SEARCH_FIXTURE };
   }
   return { PAWPIE_SEARCH_ADAPTER: "exa", EXA_API_KEY: env.EXA_API_KEY ?? "" };
+}
+
+// Checked in the parent process before the judge ever runs: an unconfigured
+// backend must refuse loudly here, not fail silently inside the spawned MCP
+// server (where `createSearchAdapterFromEnv`'s own throw is invisible to the
+// judge — it just proceeds with no tools, and a resulting "clear" verdict
+// would misrepresent a decision that was never actually searched).
+function searchConfigError(env: NodeJS.ProcessEnv): string | null {
+  if (env.PAWPIE_SEARCH_FIXTURE) return null;
+  if (!env.EXA_API_KEY || env.EXA_API_KEY.trim() === "") {
+    return "no search backend is configured: set EXA_API_KEY, or PAWPIE_SEARCH_FIXTURE for a test fixture";
+  }
+  return null;
 }
 
 export function createSearchAdapterFromEnv(env: NodeJS.ProcessEnv): SearchAdapter {
@@ -121,12 +167,6 @@ export function createSearchAdapterFromEnv(env: NodeJS.ProcessEnv): SearchAdapte
   }
   if (!env.EXA_API_KEY) throw new Error("EXA_API_KEY is required for the exa search adapter");
   return createExaAdapter(env.EXA_API_KEY);
-}
-
-// Exported only so tests can drive the trigger logic with a canned
-// SearchAdapter object directly, without spawning the MCP-server subprocess.
-export function fixtureAdapterFor(results: Parameters<typeof createFixtureAdapter>[0]): SearchAdapter {
-  return createFixtureAdapter(results);
 }
 
 export interface RunRecheckOptions {
@@ -147,7 +187,14 @@ export function runRecheck(
   try {
     scan = scanAdrDir(adrDir);
   } catch (err) {
-    throw new ReadFailure(adrDir, err);
+    return {
+      schema: "pawpie-recheck@1",
+      ok: false,
+      reason: "adr-dir-unreadable",
+      id,
+      message: `could not read ${adrDir}: ${(err as Error).message}`,
+      exitCode: 2,
+    };
   }
 
   const adr = scan.adrs.find((a) => a.id === id);
@@ -170,6 +217,11 @@ export function runRecheck(
       message: `ADR ${id} fails its own checks (${adr.error.kind}) — fix it before punching it`,
       exitCode: 2,
     };
+  }
+
+  const configError = searchConfigError(env);
+  if (configError) {
+    return { schema: "pawpie-recheck@1", ok: false, reason: "search-not-configured", id, message: configError, exitCode: 2 };
   }
 
   const adrContent = fs.readFileSync(path.join(adrDir, adr.file), "utf8");

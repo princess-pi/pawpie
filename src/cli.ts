@@ -213,8 +213,12 @@ function runRecheckCommand(
   try {
     result = runRecheck(repoPath, id);
   } catch (err) {
-    const message = err instanceof ReadFailure ? err.message : `could not read ADR ${id}: ${(err as Error).message}`;
-    stderr(`pawpie: ${message}`);
+    // runRecheck reports every expected failure (missing/unreadable ADR
+    // directory included) as a RecheckRefusal; this only catches a genuine
+    // race (e.g. the ADR file deleted between the scan and the read).
+    const message = `could not read ADR ${id}: ${(err as Error).message}`;
+    if (json) stdout(JSON.stringify({ schema: "pawpie-recheck@1", ok: false, reason: "adr-dir-unreadable", id, message, exitCode: 2 }));
+    else stderr(`pawpie: ${message}`);
     return 2;
   }
 
@@ -269,9 +273,9 @@ function isMainModule(): boolean {
   }
 }
 
-// Undocumented on purpose: this is the MCP search server judge.ts spawns as
-// a child of the judge command, over its own stdio, never invoked by a
-// human. It never returns — it runs until stdin closes.
+// Not in --help, and not meant for a human to type: this is the MCP search
+// server judge.ts spawns as a child of the judge command, over its own
+// stdio. It never returns — it runs until stdin closes.
 function runMcpServeEntry(): void {
   const adapter = createSearchAdapterFromEnv(process.env);
   runMcpStdioServer(adapter, process.env.PAWPIE_MCP_COUNTS_FILE);

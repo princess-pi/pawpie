@@ -39,14 +39,22 @@ function toolResult(text: string) {
   return { content: [{ type: "text", text }] };
 }
 
+function toolError(message: string) {
+  return { content: [{ type: "text", text: message }], isError: true };
+}
+
 // Pure request handler — no stdio — so it is unit-testable without spawning
-// a subprocess. `request.id === undefined` marks a notification, which gets
-// no response (returning null tells the caller not to write anything).
+// a subprocess. Any request with no "id" is a JSON-RPC notification, which
+// gets no response at all (null tells the caller to write nothing) —
+// notifications/initialized included, and any other notification method a
+// real MCP client sends (notifications/cancelled, roots/list_changed, …).
 export async function handleMcpRequest(
   adapter: SearchAdapter,
   counts: McpCounts,
   request: JsonRpcRequest,
 ): Promise<Record<string, unknown> | null> {
+  if (request.id === undefined) return null;
+
   const respond = (result: unknown) => ({ jsonrpc: "2.0", id: request.id, result });
   const fail = (message: string) => ({
     jsonrpc: "2.0",
@@ -61,8 +69,6 @@ export async function handleMcpRequest(
         capabilities: { tools: {} },
         serverInfo: { name: "pawpie-search", version: "1" },
       });
-    case "notifications/initialized":
-      return null;
     case "tools/list":
       return respond({ tools: TOOLS });
     case "tools/call": {
@@ -70,15 +76,27 @@ export async function handleMcpRequest(
       const args = (request.params?.arguments ?? {}) as Record<string, unknown>;
       if (name === "search") {
         const query = String(args.query ?? "");
-        const hits = await adapter.search(query);
-        counts.searches += 1;
-        return respond(toolResult(JSON.stringify(hits)));
+        try {
+          const hits = await adapter.search(query);
+          counts.searches += 1;
+          return respond(toolResult(JSON.stringify(hits)));
+        } catch (err) {
+          // A transient backend failure (a rate limit, a timeout) must never
+          // crash this server — an unhandled rejection here would take down
+          // the judge's only search tool for the rest of the run, with no
+          // JSON-RPC error reaching the caller for this call.
+          return respond(toolError(`search failed: ${(err as Error).message}`));
+        }
       }
       if (name === "fetch_url") {
         const url = String(args.url ?? "");
-        const text = await adapter.fetch(url);
-        counts.fetches += 1;
-        return respond(toolResult(text));
+        try {
+          const text = await adapter.fetch(url);
+          counts.fetches += 1;
+          return respond(toolResult(text));
+        } catch (err) {
+          return respond(toolError(`fetch failed: ${(err as Error).message}`));
+        }
       }
       return fail(`unknown tool "${name}"`);
     }
@@ -89,8 +107,8 @@ export async function handleMcpRequest(
 
 // The real entry point: newline-delimited JSON-RPC over stdio, per MCP's
 // stdio transport. Writes `counts` to `countsFile` after every tool call so
-// the parent process (which only sees this server's PID via the judge's own
-// MCP config, not its stdio) can read usage back after the judge exits.
+// `judge.ts`, which only configured this server's command/env and never
+// talks to it directly, can read usage back after the judge process exits.
 export function runMcpStdioServer(adapter: SearchAdapter, countsFile?: string): void {
   const counts: McpCounts = { searches: 0, fetches: 0 };
   const rl = readline.createInterface({ input: process.stdin, terminal: false });
@@ -104,15 +122,23 @@ export function runMcpStdioServer(adapter: SearchAdapter, countsFile?: string): 
     } catch {
       return;
     }
-    void handleMcpRequest(adapter, counts, request).then((response) => {
-      if (countsFile) {
-        try {
-          fs.writeFileSync(countsFile, JSON.stringify(counts));
-        } catch {
-          // Best-effort usage reporting only — never fail the tool call over it.
+    handleMcpRequest(adapter, counts, request)
+      .then((response) => {
+        if (countsFile) {
+          try {
+            fs.writeFileSync(countsFile, JSON.stringify(counts));
+          } catch {
+            // Best-effort usage reporting only — never fail the tool call over it.
+          }
         }
-      }
-      if (response) process.stdout.write(`${JSON.stringify(response)}\n`);
-    });
+        if (response) process.stdout.write(`${JSON.stringify(response)}\n`);
+      })
+      .catch((err: unknown) => {
+        // handleMcpRequest itself catches every adapter failure — this is a
+        // last-resort guard against a bug in the handler, so the server
+        // stays up (an unhandled rejection would otherwise kill the process
+        // node ≥15) instead of a request going unanswered.
+        process.stderr.write(`pawpie __mcp-serve: unexpected error: ${(err as Error).message}\n`);
+      });
   });
 }

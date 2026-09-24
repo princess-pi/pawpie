@@ -28,19 +28,26 @@ export function writeSidecar(repoPath: string, lines: string[]): void {
 // real judge in a test" rule. `exitCode` lets a test simulate a judge that
 // fails outright.
 export function fakeJudgeEnv(verdict: unknown, exitCode = 0): NodeJS.ProcessEnv {
-  const scriptPath = path.join(
-    fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-fake-judge-")),
-    "judge.mjs",
-  );
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-fake-judge-"));
+  const scriptPath = path.join(dir, "judge.mjs");
   const body =
     exitCode === 0
       ? `process.stdout.write(process.env.PAWPIE_TEST_VERDICT ?? "");\n`
       : `process.stderr.write("fake judge failure\\n"); process.exit(${exitCode});\n`;
   fs.writeFileSync(scriptPath, body, "utf8");
+
+  // This fake judge ignores its tools entirely, but runRecheck still
+  // preflights that a search backend is configured before invoking any
+  // judge — a harmless empty fixture satisfies that check without pulling
+  // EXA_API_KEY (or a real network call) into a unit test.
+  const fixturePath = path.join(dir, "unused-fixture.json");
+  fs.writeFileSync(fixturePath, JSON.stringify({ results: [] }), "utf8");
+
   return {
     ...process.env,
     PAWPIE_JUDGE_CMD: `node ${scriptPath}`,
     PAWPIE_TEST_VERDICT: typeof verdict === "string" ? verdict : JSON.stringify(verdict),
+    PAWPIE_SEARCH_FIXTURE: fixturePath,
   };
 }
 
