@@ -40,6 +40,8 @@ const searchResponse = lines.find((l) => l.id === 2);
 const hits = JSON.parse(searchResponse.result.content[0].text);
 const raised = hits.some((h) => h.title.includes("${RAISE_MARKER}"));
 
+const checkedClaims = [{ text: "bun hardlinks packages from a global cache", disposition: "taken" }];
+
 const verdict = raised
   ? {
       outcome: "raised",
@@ -52,9 +54,10 @@ const verdict = raised
         },
       ],
       extractedClaims: [],
+      checkedClaims,
       unchecked: [],
     }
-  : { outcome: "clear", raises: [], extractedClaims: [], unchecked: [] };
+  : { outcome: "clear", raises: [], extractedClaims: [], checkedClaims, unchecked: [] };
 
 process.stdout.write(JSON.stringify(verdict));
 `,

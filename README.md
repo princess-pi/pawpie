@@ -68,7 +68,10 @@ changed since the ADR's date. This covers the road taken and every road not take
 road-not-taken claim ("X was rejected because of Y") raises just as much as a road-taken one does.
 When an ADR carries no usable `## Claims` section (a prose-only ADR), the judge extracts the claims
 itself from the prose and reports them under `extractedClaims` in `--json` — it never writes them
-back into the ADR.
+back into the ADR. A pass-1 raise must name one of those claims verbatim (recorded, or extracted),
+and the judge must account for every one it iterated (raised or not) — a verdict that omits a claim
+from that accounting, or names one that was never on the list, is rejected outright rather than
+silently accepted as a complete pass 1.
 
 **Pass 2 — go back to the original question**, independent of the claim list. It asks exactly four
 questions about `## Problem`:
@@ -85,9 +88,9 @@ questions about `## Problem`:
 Either pass can raise. **Every raise names its pass**, plus either the claim (pass 1) or which of
 the four questions (pass 2), and carries evidence — a source (a URL, or a repo artifact such as
 `README.md` or `issue #12`) and a direct quote — and never a recommendation: `recheck`/`punch`
-never re-decides. Questions 3 and 4 need input the web cannot supply (this repo's own state, and
-the host's agent capabilities); when that input is unavailable, the affected question is reported
-as **`unchecked`**, never folded into "no change".
+never re-decides. Questions 3 and 4 need input the web cannot supply — question 3 the host's agent
+capabilities, question 4 this repo's own state (README and open issues); when that input is
+unavailable, the affected question is reported as **`unchecked`**, never folded into "no change".
 
 Exactly one line is appended to `docs/adr/recheck.tsv` per run, whether the outcome is `raised` or
 `clear`. The ADR file itself is never touched.
@@ -160,6 +163,12 @@ actually used (`usage.searches`, `usage.fetches`, `usage.judgeCalls`) — it nev
   issues fixture are unavailable; question 3 (`new-make-abilities`) depends only on
   `PAWPIE_AGENT_CAPABILITIES` and is `unchecked` whenever that isn't set. Both are enforced in code
   (`pass2QuestionAvailable` in `src/judge.ts`), not left to the judge's honesty.
+- **`recheck`/`punch` reads the ADR file twice** — once inside `list`'s own directory scan (to
+  gate on `adr.error`/`## Claims`), once to build the judge's prompt — with no lock between them.
+  An edit landing in that window (e.g. `## Problem` deleted) is judged against content the first
+  read never validated. The same class of race `new`'s own known limit above documents for
+  concurrent writers; not fixed for the same reason — a tool meant to be run interactively, one
+  command at a time.
 
 ## The one writing rule
 
@@ -257,8 +266,8 @@ guarantee.
   file never wrote or came back malformed; a failed search/fetch call increments its `*Errors`
   count separately from the successful-call count), `exitCode` (0 clear, 10 raised).
 - **`ok: false`** — `id` (`null` when none was given), `message`, `exitCode` (2 or 1), and `reason`
-  of `missing-id` / `usage-error` / `adr-dir-unreadable` / `adr-not-found` / `adr-invalid` /
-  `search-not-configured` / `pass2-context-unreadable` (exit 2), or `judge-failed` /
+  of `missing-id` / `usage-error` / `adr-dir-unreadable` / `adr-file-unreadable` / `adr-not-found` /
+  `adr-invalid` / `search-not-configured` / `pass2-context-unreadable` (exit 2), or `judge-failed` /
   `sidecar-unwritable` (exit 1) — a `sidecar-unwritable` refusal also carries `verdict` (the same
   shape as the `ok: true` fields above, minus `id`/`exitCode`), since the judge already completed a
   full, uncapped research run by the time the sidecar append failed.
@@ -274,7 +283,7 @@ title or sidecar date containing one comes through as `\u001b`, not a raw byte.
 |---|---|
 | 0 | ran; nothing raised (also help, and a `recheck`/`punch` outcome of `clear`) |
 | 1 | `recheck`/`punch`: the judge failed (nonzero exit or an unparseable/invalid verdict), or `recheck.tsv` could not be appended to |
-| 2 | usage error: an unknown command, an unknown flag, an unexpected extra argument, a missing or newline-containing title for `new`, no ADR directory or an unreadable ADR directory/sidecar for `list`, an unwritable ADR directory for `new` (or an unreadable ADR directory/sidecar, reported by naming that path instead), or `recheck`/`punch` with no id, an unreadable ADR directory, an id that doesn't exist, an ADR that already fails its own `list` checks, or no search backend configured (neither `EXA_API_KEY` nor `PAWPIE_SEARCH_FIXTURE`) |
+| 2 | usage error: an unknown command, an unknown flag, an unexpected extra argument, a missing or newline-containing title for `new`, no ADR directory or an unreadable ADR directory/sidecar for `list`, an unwritable ADR directory for `new` (or an unreadable ADR directory/sidecar, reported by naming that path instead), or `recheck`/`punch` with no id, an unreadable ADR directory or file, an id that doesn't exist, an ADR that already fails its own `list` checks, no search backend configured (neither `EXA_API_KEY` nor `PAWPIE_SEARCH_FIXTURE`), an unreadable or malformed `PAWPIE_SEARCH_FIXTURE`, or an explicitly configured pass-2 context file (`PAWPIE_PASS2_ISSUES_FIXTURE` / `PAWPIE_AGENT_CAPABILITIES`) that can't be read |
 | 3 | an ADR is present and checks nothing: no `## Problem`, no date in any known shape, unreadable, or a duplicate number — also returned by `new` when the directory already has a duplicate number |
 | 10 | `recheck`/`punch` raised the decision for a human to triage |
 

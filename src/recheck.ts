@@ -12,6 +12,7 @@ export interface RecheckRefusal {
     | "missing-id"
     | "usage-error"
     | "adr-dir-unreadable"
+    | "adr-file-unreadable"
     | "adr-not-found"
     | "adr-invalid"
     | "search-not-configured"
@@ -110,11 +111,11 @@ function claimsFor(adrContent: string): Claim[] | null {
 // web cannot answer. The README is read unconditionally (every run, tests
 // included — there is no GitHub check, and none is needed for a local file);
 // open issues and agent capabilities have no live lookup yet in v0 and come
-// only from an explicitly configured fixture path. Missing input is reported
-// to the judge as UNAVAILABLE, per the issue's own "unchecked, never no
-// change" instruction — but a path the caller DID set and that fails to read
-// is a misconfiguration, not "unavailable", so it is surfaced instead of
-// silently swallowed (see the two `Env is set` checks in runRecheck).
+// only from an explicitly configured fixture path. Missing input reaches the
+// judge as UNAVAILABLE. A path the caller explicitly set and that fails to
+// read is a misconfiguration, not "unavailable" — it propagates (an
+// unset README.md is the only silent case) and runRecheck turns that into a
+// pass2-context-unreadable refusal instead of a silent null.
 function gatherPass2Context(repoPath: string, env: NodeJS.ProcessEnv): Pass2Context {
   let readme: string | null = null;
   try {
@@ -149,7 +150,10 @@ function searchAdapterEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 function searchConfigError(env: NodeJS.ProcessEnv): string | null {
   if (env.PAWPIE_SEARCH_FIXTURE) {
     try {
-      JSON.parse(fs.readFileSync(env.PAWPIE_SEARCH_FIXTURE, "utf8"));
+      const fixture: unknown = JSON.parse(fs.readFileSync(env.PAWPIE_SEARCH_FIXTURE, "utf8"));
+      if (typeof fixture !== "object" || fixture === null || !Array.isArray((fixture as { results?: unknown }).results)) {
+        return `PAWPIE_SEARCH_FIXTURE (${env.PAWPIE_SEARCH_FIXTURE}) is not a fixture: it needs a "results" array`;
+      }
     } catch (err) {
       return `PAWPIE_SEARCH_FIXTURE (${env.PAWPIE_SEARCH_FIXTURE}) could not be read as JSON: ${(err as Error).message}`;
     }

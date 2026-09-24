@@ -5,15 +5,20 @@ import * as path from "node:path";
 import { refuseMissingId, runRecheck } from "../src/recheck.ts";
 import { adrDirOf, fakeJudgeEnv, makeTempRepo, writeAdrFile } from "./support.ts";
 
-const CLEAR_VERDICT = { outcome: "clear", raises: [], extractedClaims: [], unchecked: [] };
-
-// Must match one of ADR_WITH_CLAIMS's recorded claims exactly (text and
+// Must match ADR_WITH_CLAIMS's recorded claims exactly (text and
 // disposition) — validateVerdict rejects a pass-1 raise on any claim the ADR
-// doesn't actually record.
+// doesn't actually record, and requires every one of these to be accounted
+// for in "checkedClaims" regardless of whether it raised.
 const RECORDED_CLAIM_TEXT: Record<"taken" | "not-taken", string> = {
   taken: "bun hardlinks packages from a global cache",
   "not-taken": "npm re-copies every package on every install",
 };
+const ALL_CLAIMS = [
+  { text: RECORDED_CLAIM_TEXT.taken, disposition: "taken" },
+  { text: RECORDED_CLAIM_TEXT["not-taken"], disposition: "not-taken" },
+];
+
+const CLEAR_VERDICT = { outcome: "clear", raises: [], extractedClaims: [], checkedClaims: ALL_CLAIMS, unchecked: [] };
 
 function pass1Raise(disposition: "taken" | "not-taken") {
   return {
@@ -27,6 +32,7 @@ function pass1Raise(disposition: "taken" | "not-taken") {
       },
     ],
     extractedClaims: [],
+    checkedClaims: ALL_CLAIMS,
     unchecked: [],
   };
 }
@@ -43,6 +49,7 @@ function pass2Raise(question: string) {
       },
     ],
     extractedClaims: [],
+    checkedClaims: ALL_CLAIMS,
     unchecked: [],
   };
 }
@@ -353,6 +360,7 @@ describe("pawpie recheck/punch — claims: recorded vs. extracted", () => {
       outcome: "clear",
       raises: [],
       extractedClaims: [{ text: "bun hardlinks from a shared cache", disposition: "taken" }],
+      checkedClaims: [{ text: "bun hardlinks from a shared cache", disposition: "taken" }],
       unchecked: [],
     };
     const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(verdict) });
@@ -473,6 +481,7 @@ describe("pawpie recheck/punch — the sidecar", () => {
         { pass: 2, question: "changed-capabilities", note: "price dropped", evidence: { source: "https://b", quote: "q2" } },
       ],
       extractedClaims: [],
+      checkedClaims: ALL_CLAIMS,
       unchecked: [],
     };
     runRecheck(repo, "0001", { env: fakeJudgeEnv(verdict) });
@@ -485,7 +494,7 @@ describe("pawpie recheck/punch — the sidecar", () => {
     expect(note).toBe("pass1:taken found X; pass2:changed-capabilities price dropped; unchecked: new-make-abilities,changed-spec");
   });
 
-  test("reports usage as unknown (null), never a false zero, for a judge that never calls its tools", () => {
+  test("reports usage as unknown (null), never a false zero, for a judge that never starts the MCP server", () => {
     const repo = makeTempRepo();
     seedAdr(repo);
     const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(CLEAR_VERDICT) });

@@ -113,9 +113,13 @@ export async function handleMcpRequest(
 }
 
 // The real entry point: newline-delimited JSON-RPC over stdio, per MCP's
-// stdio transport. Writes `counts` to `countsFile` after every tool call so
+// stdio transport. Writes `counts` to `countsFile` after every handled
+// request (initialize and tools/list included, not just a tool call) so
 // `judge.ts`, which only configured this server's command/env and never
 // talks to it directly, can read usage back after the judge process exits.
+// A client that starts this server but calls no tool therefore produces a
+// verified {searches: 0, ...} — `judge.ts` only reads `null` (unknown) when
+// the counts file was never written at all, i.e. this server never started.
 export function runMcpStdioServer(adapter: SearchAdapter, countsFile?: string): void {
   const counts: McpCounts = { searches: 0, fetches: 0, searchErrors: 0, fetchErrors: 0 };
   const rl = readline.createInterface({ input: process.stdin, terminal: false });

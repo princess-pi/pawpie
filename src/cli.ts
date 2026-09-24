@@ -183,6 +183,27 @@ function runNew(args: string[], stdout: (s: string) => void, stderr: (s: string)
   return 0;
 }
 
+function renderVerdictText(
+  id: string,
+  verdict: Pick<RecheckResult, "outcome" | "raises" | "unchecked">,
+  stdout: (s: string) => void,
+): void {
+  if (verdict.outcome === "clear") stdout(`${id}: clear`);
+  else {
+    stdout(`${id}: raised`);
+    for (const raise of verdict.raises) {
+      const label = raise.pass === 1 ? `pass 1, ${raise.claim.disposition} claim` : `pass 2, ${raise.question}`;
+      stdout(`  [${label}] ${raise.note}`);
+      stdout(`    ${raise.evidence.source} — "${raise.evidence.quote}"`);
+    }
+  }
+  // Printed for "clear" too — a quiet run is never read as "everything is
+  // current" when a pass-2 question went unchecked for lack of input.
+  if (verdict.unchecked.length > 0) {
+    stdout(`  unchecked: ${verdict.unchecked.join(", ")} (missing repo/agent context)`);
+  }
+}
+
 function runRecheckCommand(
   args: string[],
   stdout: (s: string) => void,
@@ -219,28 +240,19 @@ function runRecheckCommand(
     // directory included) as a RecheckRefusal; this only catches a genuine
     // race (e.g. the ADR file deleted between the scan and the read).
     const message = `could not read ADR ${id}: ${(err as Error).message}`;
-    if (json) stdout(JSON.stringify({ schema: "pawpie-recheck@1", ok: false, reason: "adr-dir-unreadable", id, message, exitCode: 2 }));
+    if (json) stdout(JSON.stringify({ schema: "pawpie-recheck@1", ok: false, reason: "adr-file-unreadable", id, message, exitCode: 2 }));
     else stderr(`pawpie: ${message}`);
     return 2;
   }
 
   if (json) stdout(JSON.stringify(result));
-  else if (!result.ok) stderr(`pawpie: ${result.message}`);
-  else {
-    if (result.outcome === "clear") stdout(`${result.id}: clear`);
-    else {
-      stdout(`${result.id}: raised`);
-      for (const raise of result.raises) {
-        const label = raise.pass === 1 ? `pass 1, ${raise.claim.disposition} claim` : `pass 2, ${raise.question}`;
-        stdout(`  [${label}] ${raise.note}`);
-        stdout(`    ${raise.evidence.source} — "${raise.evidence.quote}"`);
-      }
-    }
-    // Printed for "clear" too — a quiet run is never read as "everything is
-    // current" when a pass-2 question went unchecked for lack of input.
-    if (result.unchecked.length > 0) {
-      stdout(`  unchecked: ${result.unchecked.join(", ")} (missing repo/agent context)`);
-    }
+  else if (!result.ok) {
+    stderr(`pawpie: ${result.message}`);
+    // sidecar-unwritable still carries a completed, uncapped research run —
+    // print it rather than dropping every raise on the floor.
+    if (result.verdict) renderVerdictText(result.id ?? "?", result.verdict, stdout);
+  } else {
+    renderVerdictText(result.id, result, stdout);
   }
   return result.exitCode;
 }

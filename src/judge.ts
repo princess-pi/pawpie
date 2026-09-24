@@ -35,17 +35,23 @@ export interface JudgeVerdict {
   // lines parsed) — the judge extracted them itself from the prose instead
   // of pass 1 iterating a recorded list. Never written back to the ADR.
   extractedClaims: ClaimRef[];
+  // Every claim pass 1 actually examined (recorded or extracted), whether or
+  // not it raised — required to cover every claim in the iterated list, so a
+  // "clear" verdict can't mean "pass 1 silently skipped some claims".
+  checkedClaims: ClaimRef[];
   // Pass-2 questions the judge could not check because its input (repo spec
-  // context, agent capability list) was unavailable — reported honestly
-  // rather than folded into "clear".
+  // context, agent capability list) was unavailable — always exactly the set
+  // of genuinely unavailable questions (see pass2QuestionAvailable), never
+  // trusted from the judge's own report.
   unchecked: Question[];
 }
 
 export interface JudgeUsage {
-  // null means unknown — the counts file was never written (the search
-  // server never started or never got a request) or came back malformed —
-  // never reported as 0, which would misrepresent an unknown count as a
-  // verified "no tool calls happened".
+  // null means unknown — the search server (__mcp-serve) never started at
+  // all, so its counts file was never written, or the file came back
+  // malformed. A server that started but was never called (initialize/
+  // tools/list only) writes a verified {searches: 0, ...}, which IS reported
+  // as 0 — only "never started" or "malformed" collapse to null.
   searches: number | null;
   fetches: number | null;
   // A failed search/fetch call, counted separately so an all-failing backend
@@ -85,7 +91,7 @@ function contextBlock(label: string, text: string | null): string {
 // Whether the input pass 2 needs for a given question is available at all —
 // used both to phrase the prompt and, after the judge answers, to force that
 // question into `unchecked` when it truly was, regardless of what the judge
-// says (see the post-hoc enforcement in runJudge).
+// says (enforced in validateVerdict, not trusted from the judge's own report).
 export function pass2QuestionAvailable(question: Question, pass2: Pass2Context): boolean {
   if (question === "changed-spec") return pass2.readme !== null || pass2.openIssues !== null;
   if (question === "new-make-abilities") return pass2.agentCapabilities !== null;
@@ -122,7 +128,10 @@ PASS 1 — iterate the claims. ${claimsSection}
 For each claim, check whether it still holds or has changed since the ADR's date. This covers the \
 road taken and every road not taken alike — a road-not-taken claim ("X was rejected because of Y") \
 raises just as much as a road-taken one does. A pass-1 raise's "claim" must be one of the claims \
-listed above verbatim (text and disposition) — never a claim you invented.
+listed above verbatim (text and disposition) — never a claim you invented. List EVERY claim you \
+examined, raised or not, under "checkedClaims" — its keys must exactly match the claim list above \
+(or your own "extractedClaims" when you extracted them) so a caller can verify pass 1 covered all \
+of them, not just the ones that raised.
 
 PASS 2 — go back to the original question, independent of the claim list. Read the "## Problem" \
 below and ask exactly these four questions:
@@ -153,10 +162,11 @@ Reply with ONLY a JSON object (no prose, no markdown fence) matching exactly:
              "note": "<one line>",
              "evidence": {"source": "<url or repo artifact>", "quote": "<direct quote>"}}],
  "extractedClaims": [{"text": "<claim text>", "disposition": "taken" | "not-taken"}],
+ "checkedClaims": [{"text": "<claim text>", "disposition": "taken" | "not-taken"}, ...every claim iterated],
  "unchecked": ["new-options" | "changed-capabilities" | "new-make-abilities" | "changed-spec", ...]}
 "raises" is empty when outcome is "clear". "extractedClaims" is empty when the ADR already had a \
 usable "## Claims" section. "unchecked" lists only questions 3/4 you could not check because their \
-input above was UNAVAILABLE.
+input above was UNAVAILABLE — never a question whose input was provided above.
 
 --- ADR ${adrId} ---
 ${adrContent}
@@ -205,7 +215,24 @@ function validateVerdict(doc: unknown, recordedClaims: Claim[] | null, pass2: Pa
     throw new JudgeError(`judge verdict has invalid "outcome": ${JSON.stringify(d.outcome)}`);
   }
 
-  const recordedKeys = recordedClaims ? new Set(recordedClaims.map(claimKey)) : null;
+  const extractedClaims = Array.isArray(d.extractedClaims)
+    ? d.extractedClaims.map((c, i) => validateClaimRef(c, `extractedClaims[${i}]`))
+    : [];
+  if (recordedClaims !== null && extractedClaims.length > 0) {
+    throw new JudgeError('"extractedClaims" must be empty — this ADR already had a recorded ## Claims list');
+  }
+  if (recordedClaims === null && extractedClaims.length === 0) {
+    throw new JudgeError('"extractedClaims" is empty, but this ADR had no recorded ## Claims — the judge must extract at least one');
+  }
+
+  // Pass 1's membership set: the recorded ## Claims when there were any,
+  // otherwise exactly what the judge itself claims to have extracted — a
+  // prose-only ADR's pass-1 raises are checked against that, not left
+  // unconstrained just because there was no recorded list to check against.
+  const claimsIterated = recordedClaims
+    ? recordedClaims.map((c) => ({ text: c.text, disposition: c.disposition }))
+    : extractedClaims;
+  const iteratedKeys = new Set(claimsIterated.map(claimKey));
 
   const rawRaises = Array.isArray(d.raises) ? d.raises : [];
   const raises: Raise[] = rawRaises.map((r, i) => {
@@ -227,8 +254,8 @@ function validateVerdict(doc: unknown, recordedClaims: Claim[] | null, pass2: Pa
     const note = typeof raise.note === "string" ? raise.note : "";
     if (raise.pass === 1) {
       const claim = validateClaimRef(raise.claim, `raise[${i}].claim`);
-      if (recordedKeys && !recordedKeys.has(claimKey(claim))) {
-        throw new JudgeError(`raise[${i}].claim is not one of the recorded ## Claims: ${JSON.stringify(claim)}`);
+      if (!iteratedKeys.has(claimKey(claim))) {
+        throw new JudgeError(`raise[${i}].claim is not one of the claims pass 1 iterated: ${JSON.stringify(claim)}`);
       }
       return { pass: 1, claim, note, evidence: { source: evidence.source, quote: evidence.quote } };
     }
@@ -248,29 +275,31 @@ function validateVerdict(doc: unknown, recordedClaims: Claim[] | null, pass2: Pa
     throw new JudgeError('judge verdict says "clear" but carries raises — a contradiction');
   }
 
-  const extractedClaims = Array.isArray(d.extractedClaims)
-    ? d.extractedClaims.map((c, i) => validateClaimRef(c, `extractedClaims[${i}]`))
+  const checkedClaims = Array.isArray(d.checkedClaims)
+    ? d.checkedClaims.map((c, i) => validateClaimRef(c, `checkedClaims[${i}]`))
     : [];
-  if (recordedClaims !== null && extractedClaims.length > 0) {
-    throw new JudgeError('"extractedClaims" must be empty — this ADR already had a recorded ## Claims list');
-  }
-  if (recordedClaims === null && extractedClaims.length === 0) {
-    throw new JudgeError('"extractedClaims" is empty, but this ADR had no recorded ## Claims — the judge must extract at least one');
+  const checkedKeys = new Set(checkedClaims.map(claimKey));
+  for (const key of iteratedKeys) {
+    if (!checkedKeys.has(key)) {
+      throw new JudgeError(`"checkedClaims" is missing a claim pass 1 was supposed to iterate: ${key}`);
+    }
   }
 
   const reportedUnchecked = Array.isArray(d.unchecked)
     ? d.unchecked.filter((q): q is Question => QUESTIONS.includes(q as Question))
     : [];
-
-  // Force-add, never trust-only: a judge that ignores the "report unchecked"
-  // instruction must not be able to make an unavailable question read as
-  // "no change" simply by omitting it from its own "unchecked" array.
-  const unchecked = new Set(reportedUnchecked);
-  for (const q of QUESTIONS) {
-    if (!pass2QuestionAvailable(q, pass2)) unchecked.add(q);
+  // Strict both ways: a question the judge reports unchecked must actually
+  // have been unavailable (never a dishonest "I didn't bother" for an
+  // available question), and "unchecked" itself is always exactly the
+  // genuinely-unavailable set, never trusted from the judge's own report.
+  for (const q of reportedUnchecked) {
+    if (pass2QuestionAvailable(q, pass2)) {
+      throw new JudgeError(`judge reported "${q}" as unchecked, but its input was available`);
+    }
   }
+  const unchecked = QUESTIONS.filter((q) => !pass2QuestionAvailable(q, pass2));
 
-  return { outcome: d.outcome, raises, extractedClaims, unchecked: [...unchecked] };
+  return { outcome: d.outcome, raises, extractedClaims, checkedClaims, unchecked };
 }
 
 export interface JudgeOptions {
@@ -308,13 +337,25 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
   const pass2: Pass2Context = opts.pass2 ?? { readme: null, openIssues: null, agentCapabilities: null };
   const prompt = buildPrompt(adrId, adrContent, opts.claims ?? null, pass2);
 
+  // In non-interactive print mode, Claude Code (and harnesses that share its
+  // CLI shape) denies any tool not explicitly allowed — with neither an
+  // interactive prompt nor a permission mode granting it, a bare
+  // --mcp-config would let the judge start the server and then never
+  // actually call "search"/"fetch_url", answering from its own knowledge
+  // while still producing a well-formed (and wrong) "clear" verdict.
+  const ALLOWED_TOOLS = "mcp__pawpie__search,mcp__pawpie__fetch_url";
+
   try {
-    const child = spawnSync(bin, [...cmdArgs, "--mcp-config", mcpConfigFile, "--strict-mcp-config"], {
-      env,
-      input: prompt,
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-    });
+    const child = spawnSync(
+      bin,
+      [...cmdArgs, "--mcp-config", mcpConfigFile, "--strict-mcp-config", "--allowedTools", ALLOWED_TOOLS],
+      {
+        env,
+        input: prompt,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    );
     if (child.error) throw new JudgeError(`judge command failed to start: ${child.error.message}`);
     if (child.status !== 0) {
       throw new JudgeError(`judge command exited ${child.status}: ${(child.stderr ?? "").slice(0, 500)}`);
