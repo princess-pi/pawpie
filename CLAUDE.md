@@ -55,8 +55,12 @@ there about as often as you commit.
   `## Problem`, a missing date, and duplicate ADR numbers.
 - `src/sidecar.ts` — reads `docs/adr/recheck.tsv` (nothing writes it yet).
 - `src/list.ts` — `pawpie list`: builds and sorts the `pawpie-list@1` record.
-- `src/new.ts` — `pawpie new`: next free ADR number, writes the template.
+- `src/new.ts` — `pawpie new`: next free ADR number, writes the template; refuses a
+  newline-containing title (exit 2) before touching the filesystem.
 - `src/recheck.ts` — `pawpie recheck`/`pawpie punch`: refusal only (Step D).
+- `src/errors.ts` — `ReadFailure` (wraps a read error with the path that failed) and
+  `errorCode()`, used by `cli.ts`, `list.ts`, and `adr.ts` to tell an unreadable path from
+  a missing one.
 - `docs/adr/0001-standalone-public-repository.md` — this repo's own first ADR.
 
 ## Read first

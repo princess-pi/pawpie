@@ -87,6 +87,16 @@ argument, is a usage error (exit 2) rather than being read as a positional argum
 - **An ADR number is a JS `Number`,** so a filename numbered above
   `Number.MAX_SAFE_INTEGER` (2^53 − 1) can collide with a different absurdly large number instead
   of being told apart. Not a concern at any number of ADRs a human writes by hand.
+- **Two `pawpie new` calls with the *same* title, run concurrently, can both pick the same
+  filename** and the second write fails outright (the file is written `wx`, exclusive-create) —
+  a different, louder failure than the "different titles, same number" race above, which
+  succeeds twice and is only caught later by `list`.
+- **A non-numeric sidecar `<adr_id>`** (anything that isn't all digits) is left as-is rather than
+  normalized, and is never added to the gap-filling exclusion set in *next free number* above —
+  only a numeric id can keep a number reserved.
+- **`docs/adr` existing as a plain file, not a directory,** is reported the same way as it being
+  entirely missing — `no-adr-directory` for `list`, and `new`'s own `mkdirSync` failing under it
+  for `new`.
 
 ## The one writing rule
 
@@ -99,6 +109,10 @@ a short option name (`bun`, `npm`, most tool names, all under 4 letters) reused 
 **warn** on an unrelated shared word (a generic domain term repeated from the title). It catches the
 common case and not every case, in either direction.
 
+`new` refuses (exit 2) a title containing a newline, rather than writing one — a newline would
+break out of the generated file's `# <id>. <title>` heading line and let the rest of the title
+inject its own `## Problem`/`## Decision` markdown, read back as real content.
+
 ## Recheck sidecar
 
 `docs/adr/recheck.tsv`, committed, one line per check, because an accepted ADR is immutable:
@@ -107,22 +121,47 @@ common case and not every case, in either direction.
 <adr_id>	<YYYY-MM-DD>	<clear|raised|skipped>	<one-line note>
 ```
 
-`list` reads it to show the last check per ADR; nothing writes it yet.
+`list` reads it to show the last check per ADR; nothing writes it yet. Reading it tolerates a
+leading UTF-8 BOM and both `\n` and `\r\n` line endings. Two lines for the same ADR on the same
+date: the later line in the file wins.
 
 ## Known input shapes
 
 ADRs in the wild carry their date as `- **Date:** YYYY-MM-DD`, as
 `**Status:** accepted — <who>, YYYY-MM-DD`, or as `**Status:** accepted (YYYY-MM-DD …`. `list`
 reads all three. `new` writes only the first. An index file such as `docs/adr/README.md` is
-skipped, not refused.
+skipped, not refused. A title line's leading `NNNN. ` number prefix (e.g. `# 0001. Use bun`) is
+stripped before display and before the writing-rule check above runs — only the text after it is
+the title.
 
 ## Exit codes and `--json`
 
 `list` emits one record per run on stdout under `--json`, on success and on refusal, schema
-`pawpie-list@1`. `recheck`/`punch` emit schema `pawpie-recheck@1`. Callers dispatch on the record's
-fields, never on the exit code alone. A success record carries `problemWarningCaveat`, the same
-heuristic caveat from *The one writing rule* above, so a `--json` caller sees per-ADR
-`problemWarning: false` is not a guarantee.
+`pawpie-list@1`. `recheck`/`punch` emit schema `pawpie-recheck@1`. An unrecognized top-level
+command emits schema `pawpie@1` instead (`{schema, ok: false, reason: "usage-error", message}`) —
+`new` has no `--json` contract at all in v0. Callers dispatch on the record's fields, never on the
+exit code alone. A success record carries `problemWarningCaveat`, the same heuristic caveat from
+*The one writing rule* above, so a `--json` caller sees per-ADR `problemWarning: false` is not a
+guarantee.
+
+`pawpie-list@1` covers two structurally different shapes, told apart by `ok`:
+
+- **`ok: true`** (a scan ran, whether or not any ADR raised) — `path`, `scanned`, `adrs[]` (each
+  with `id`, `file`, `title`, `date`, `lastCheck` or `null`, `problemWarning`, `error` or `null`
+  with an `error.kind` of `no-problem` / `no-date` / `unreadable` / `duplicate-number`),
+  `problemWarningCaveat`, `exitCode` (0 or 3).
+- **`ok: false`** — `path`, `message`, `exitCode` (always 2), `reason` of `no-adr-directory` /
+  `unreadable` / `usage-error`.
+
+`pawpie-recheck@1` refusals carry `id` (`null` when none was given), `message`, `exitCode` (always
+2), and `reason` of `missing-id` / `not-built-yet` / `usage-error`.
+
+Two ADRs that tie on last-check date (or are both never-checked) sort by ADR id, numerically —
+`0010` after `0009`, not before it lexically.
+
+`--json` output is not run through the terminal-control-character sanitizer that `list`'s plain
+text output is (below): `JSON.stringify` already escapes control characters in a string, so a
+title or sidecar date containing one comes through as `\u001b`, not a raw byte.
 
 | exit | meaning |
 |---|---|
