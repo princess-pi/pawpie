@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { UNFILLED_PROBLEM_PLACEHOLDER, hasDuplicateNumbers, nextFreeNumber } from "./adr.ts";
 
 export interface NewAdrError {
-  kind: "duplicate-number";
+  kind: "duplicate-number" | "invalid-title";
   message: string;
 }
 
@@ -23,6 +23,16 @@ function todayIso(): string {
 }
 
 export function createAdr(repoPath: string, title: string): NewAdrResult {
+  // A newline would break out of the "# <id>. <title>" heading line and let
+  // the rest of the title inject its own "## Problem"/"## Decision" markdown
+  // into the generated file — read as real content by extractProblemSection.
+  if (/[\r\n]/.test(title)) {
+    return {
+      ok: false,
+      error: { kind: "invalid-title", message: "title cannot contain a newline" },
+    };
+  }
+
   const adrDir = path.join(repoPath, "docs", "adr");
   fs.mkdirSync(adrDir, { recursive: true });
 

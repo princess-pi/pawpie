@@ -128,7 +128,7 @@ heuristic caveat from *The one writing rule* above, so a `--json` caller sees pe
 |---|---|
 | 0 | ran; nothing raised (also help) |
 | 1 | sidecar unwritable (reserved for `recheck`/`punch` — not reachable until Step D) |
-| 2 | usage error: an unknown command, an unknown flag, an unexpected extra argument, a missing title for `new`, no ADR directory or an unreadable ADR directory/sidecar for `list`, an unwritable ADR directory for `new` (or an unreadable ADR directory/sidecar, reported by naming that path instead), or `recheck`/`punch` (always — id or not) |
+| 2 | usage error: an unknown command, an unknown flag, an unexpected extra argument, a missing or newline-containing title for `new`, no ADR directory or an unreadable ADR directory/sidecar for `list`, an unwritable ADR directory for `new` (or an unreadable ADR directory/sidecar, reported by naming that path instead), or `recheck`/`punch` (always — id or not) |
 | 3 | an ADR is present and checks nothing: no `## Problem`, no date in any known shape, unreadable, or a duplicate number — also returned by `new` when the directory already has a duplicate number |
 | 10 | at least one ADR raised (Step D, not built yet) |
 

@@ -24,10 +24,10 @@ Exit codes:
   1   sidecar unwritable (reserved for recheck/punch — not reachable yet)
   2   usage error: unknown command, unknown flag (any '-' or '--' token
       the command doesn't take), an unexpected extra argument, a missing
-      title for 'new', no ADR directory or an unreadable ADR
-      directory/sidecar for 'list', an unwritable ADR directory for 'new'
-      (or an unreadable ADR directory/sidecar, naming that path instead),
-      or recheck/punch (always, id or not)
+      or newline-containing title for 'new', no ADR directory or an
+      unreadable ADR directory/sidecar for 'list', an unwritable ADR
+      directory for 'new' (or an unreadable ADR directory/sidecar, naming
+      that path instead), or recheck/punch (always, id or not)
   3   an ADR is present and checks nothing: no ## Problem, no date in any
       known shape, unreadable, or a duplicate number — also returned by
       'new' when the directory already has a duplicate number
@@ -160,7 +160,7 @@ function runNew(args: string[], stdout: (s: string) => void, stderr: (s: string)
   }
   if (!result.ok) {
     stderr(`pawpie: ${result.error.message}`);
-    return 3;
+    return result.error.kind === "invalid-title" ? 2 : 3;
   }
   stdout(`created ${path.join(adrDir, result.file)}`);
   return 0;

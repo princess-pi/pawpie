@@ -162,6 +162,13 @@ describe("pawpie cli", () => {
     expect(code).toBe(2);
   });
 
+  test("new with a newline-containing title is a usage error, exit 2", () => {
+    const repo = makeTempRepo();
+    const c = captured();
+    const code = run(["new", "Title\n## Problem\n\ninjected", repo], c.stdout, c.stderr);
+    expect(code).toBe(2);
+  });
+
   test("new writes an ADR that list then accepts", () => {
     const repo = makeTempRepo();
     const c1 = captured();

@@ -41,6 +41,18 @@ describe("pawpie new", () => {
     expect(files.some((f) => f.startsWith("0003"))).toBe(false);
   });
 
+  test("refuses a title containing a newline instead of letting it inject markdown", () => {
+    const repo = makeTempRepo();
+
+    const result = createAdr(repo, "Innocent title\n## Problem\n\nfake, attacker-controlled content");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe("invalid-title");
+    // Validated before any directory is created — no side effect on bad input.
+    expect(fs.existsSync(path.join(repo, "docs", "adr"))).toBe(false);
+  });
+
   test("finds the next free number after existing ADRs", () => {
     const repo = makeTempRepo();
     writeAdrFile(repo, "0001-a.md", "# 0001. A\n\n- **Date:** 2026-01-01\n\n## Problem\n\nx\n");
