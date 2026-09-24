@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { scanAdrDir, type AdrRecord } from "./adr.ts";
 import { ReadFailure } from "./errors.ts";
 import { readSidecar, lastCheckByAdr, type CheckEntry } from "./sidecar.ts";
+import { sanitizeForTerminal } from "./terminal.ts";
 
 export interface ListedAdr {
   id: string;
@@ -101,16 +102,6 @@ export function refuseList(
   message: string,
 ): ListRefusal {
   return { schema: "pawpie-list@1", ok: false, reason, path: repoPath, message, exitCode: 2 };
-}
-
-// ADR titles come from file content, and a sidecar's date/note columns are
-// unvalidated free text — either can carry a terminal escape sequence (e.g.
-// OSC 52, which can write the invoking user's clipboard). Strip C0 controls
-// and DEL before any of it reaches a terminal via the text renderer.
-// eslint-disable-next-line no-control-regex
-const CONTROL_CHARS = /[\x00-\x1f\x7f]/g;
-function sanitizeForTerminal(s: string): string {
-  return s.replace(CONTROL_CHARS, "");
 }
 
 export function renderListText(result: ListResult): string {

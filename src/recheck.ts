@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { extractClaimsSection, parseClaims, scanAdrDir, type Claim } from "./adr.ts";
+import { UNFILLED_PROBLEM_PLACEHOLDER, extractClaimsSection, extractProblemSection, parseClaims, scanAdrDir, type Claim } from "./adr.ts";
 import { JudgeError, runJudge, type ClaimRef, type JudgeUsage, type Pass2Context, type Question, type Raise } from "./judge.ts";
 import { createExaAdapter, loadFixtureAdapter } from "./search-adapter.ts";
 import type { SearchAdapter } from "./search-adapter.ts";
@@ -25,7 +25,14 @@ export interface RecheckRefusal {
   // Populated only for "sidecar-unwritable": the judge already completed a
   // full (uncapped) research run by the time the append fails, and that
   // verdict must not be silently discarded along with the refusal.
-  verdict?: { outcome: "raised" | "clear"; raises: Raise[]; extractedClaims: ClaimRef[]; unchecked: Question[]; usage: JudgeUsage };
+  verdict?: {
+    outcome: "raised" | "clear";
+    raises: Raise[];
+    extractedClaims: ClaimRef[];
+    unchecked: Question[];
+    usage: JudgeUsage;
+    backend: "fixture" | "exa";
+  };
 }
 
 export interface RecheckResult {
@@ -37,6 +44,11 @@ export interface RecheckResult {
   extractedClaims: ClaimRef[];
   unchecked: Question[];
   usage: JudgeUsage;
+  // Which search backend actually served this run — surfaced because
+  // PAWPIE_SEARCH_FIXTURE silently takes priority over EXA_API_KEY when both
+  // are set (a leaked test env var would otherwise judge canned results with
+  // no other signal).
+  backend: "fixture" | "exa";
   exitCode: 0 | 10;
 }
 
@@ -91,10 +103,28 @@ function appendSidecarLine(adrDir: string, id: string, outcome: "raised" | "clea
   fs.appendFileSync(sidecarPath, row, "utf8");
 }
 
-function noteFor(raises: Raise[], unchecked: Question[]): string {
+// A committed sidecar row is the only durable record of a run — the
+// error/null counts above only reach --json. A bare "clear" here would be
+// indistinguishable from a fully researched one, so a run where research
+// plainly did not happen (usage unknown, or every attempted call failed)
+// says so in the row itself.
+function usageCaveat(usage: JudgeUsage): string | null {
+  if (usage.searches === null || usage.fetches === null) return "usage unknown";
+  const attempted = usage.searches + (usage.searchErrors ?? 0) + usage.fetches + (usage.fetchErrors ?? 0);
+  const failed = (usage.searchErrors ?? 0) + (usage.fetchErrors ?? 0);
+  if (attempted > 0 && failed === attempted) return "every search/fetch call failed";
+  return null;
+}
+
+function noteFor(raises: Raise[], unchecked: Question[], usage: JudgeUsage, backend: "fixture" | "exa"): string {
   const raiseNotes = raises.map((r) => `${r.pass === 1 ? `pass1:${r.claim.disposition}` : `pass2:${r.question}`} ${r.note}`);
   const parts = raiseNotes.length === 0 ? ["clear"] : raiseNotes;
   if (unchecked.length > 0) parts.push(`unchecked: ${unchecked.join(",")}`);
+  const caveat = usageCaveat(usage);
+  if (caveat) parts.push(caveat);
+  // Only a fixture backend is worth flagging in a committed row — exa is the
+  // expected default, and a fixture here is either a test or a leaked env var.
+  if (backend === "fixture") parts.push("backend:fixture");
   return parts.join("; ");
 }
 
@@ -112,15 +142,18 @@ function claimsFor(adrContent: string): Claim[] | null {
 // included — there is no GitHub check, and none is needed for a local file);
 // open issues and agent capabilities have no live lookup yet in v0 and come
 // only from an explicitly configured fixture path. Missing input reaches the
-// judge as UNAVAILABLE. A path the caller explicitly set and that fails to
-// read is a misconfiguration, not "unavailable" — it propagates (an
-// unset README.md is the only silent case) and runRecheck turns that into a
-// pass2-context-unreadable refusal instead of a silent null.
+// judge as UNAVAILABLE. A read failure — a missing README, or an explicitly
+// set path that can't be read — is a misconfiguration, not "unavailable": it
+// propagates, and runRecheck turns it into a pass2-context-unreadable
+// refusal instead of a silent null. Only ENOENT on the (never explicitly
+// set) README path is read as "unavailable", since a repo with no README at
+// all is an ordinary, expected case.
 function gatherPass2Context(repoPath: string, env: NodeJS.ProcessEnv): Pass2Context {
   let readme: string | null = null;
   try {
     readme = fs.readFileSync(path.join(repoPath, "README.md"), "utf8");
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     readme = null;
   }
 
@@ -224,12 +257,27 @@ export function runRecheck(
     };
   }
 
+  const adrContent = fs.readFileSync(path.join(adrDir, adr.file), "utf8");
+
+  // `list`'s own gate (adr.error) does not flag this: a freshly created ADR
+  // with its ## Problem still unfilled is a valid, listable ADR — only
+  // punching it is meaningless, since there is no real question to research.
+  if (extractProblemSection(adrContent) === UNFILLED_PROBLEM_PLACEHOLDER) {
+    return {
+      schema: "pawpie-recheck@1",
+      ok: false,
+      reason: "adr-invalid",
+      id,
+      message: `ADR ${id}'s ## Problem section still holds the unfilled template placeholder — fill it in before punching it`,
+      exitCode: 2,
+    };
+  }
+
   const configError = searchConfigError(env);
   if (configError) {
     return { schema: "pawpie-recheck@1", ok: false, reason: "search-not-configured", id, message: configError, exitCode: 2 };
   }
-
-  const adrContent = fs.readFileSync(path.join(adrDir, adr.file), "utf8");
+  const backend: "fixture" | "exa" = env.PAWPIE_SEARCH_FIXTURE ? "fixture" : "exa";
 
   let pass2: Pass2Context;
   try {
@@ -260,7 +308,12 @@ export function runRecheck(
   }
 
   try {
-    appendSidecarLine(adrDir, id, judged.verdict.outcome, noteFor(judged.verdict.raises, judged.verdict.unchecked));
+    appendSidecarLine(
+      adrDir,
+      id,
+      judged.verdict.outcome,
+      noteFor(judged.verdict.raises, judged.verdict.unchecked, judged.usage, backend),
+    );
   } catch (err) {
     return {
       schema: "pawpie-recheck@1",
@@ -275,6 +328,7 @@ export function runRecheck(
         extractedClaims: judged.verdict.extractedClaims,
         unchecked: judged.verdict.unchecked,
         usage: judged.usage,
+        backend,
       },
     };
   }
@@ -288,6 +342,7 @@ export function runRecheck(
     extractedClaims: judged.verdict.extractedClaims,
     unchecked: judged.verdict.unchecked,
     usage: judged.usage,
+    backend,
     exitCode: judged.verdict.outcome === "raised" ? 10 : 0,
   };
 }

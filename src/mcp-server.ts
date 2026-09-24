@@ -12,6 +12,15 @@ export interface McpCounts {
   fetchErrors: number;
 }
 
+// Every URL/text the search backend actually returned, so validateVerdict
+// (judge.ts) can reject a raise whose evidence cites a URL never searched or
+// a quote that appears in no returned text — "never invent evidence" was
+// previously prompt-only prose with nothing enforcing it.
+export interface EvidenceEntry {
+  url: string;
+  text: string;
+}
+
 interface JsonRpcRequest {
   jsonrpc: "2.0";
   id?: number | string;
@@ -57,6 +66,7 @@ export async function handleMcpRequest(
   adapter: SearchAdapter,
   counts: McpCounts,
   request: JsonRpcRequest,
+  evidence?: EvidenceEntry[],
 ): Promise<Record<string, unknown> | null> {
   if (request.id === undefined) return null;
 
@@ -84,6 +94,7 @@ export async function handleMcpRequest(
         try {
           const hits = await adapter.search(query);
           counts.searches += 1;
+          evidence?.push(...hits.map((h) => ({ url: h.url, text: `${h.title}\n${h.text}` })));
           return respond(toolResult(JSON.stringify(hits)));
         } catch (err) {
           // A transient backend failure (a rate limit, a timeout) must never
@@ -99,6 +110,7 @@ export async function handleMcpRequest(
         try {
           const text = await adapter.fetch(url);
           counts.fetches += 1;
+          evidence?.push({ url, text });
           return respond(toolResult(text));
         } catch (err) {
           counts.fetchErrors += 1;
@@ -120,8 +132,9 @@ export async function handleMcpRequest(
 // A client that starts this server but calls no tool therefore produces a
 // verified {searches: 0, ...} — `judge.ts` only reads `null` (unknown) when
 // the counts file was never written at all, i.e. this server never started.
-export function runMcpStdioServer(adapter: SearchAdapter, countsFile?: string): void {
+export function runMcpStdioServer(adapter: SearchAdapter, countsFile?: string, evidenceFile?: string): void {
   const counts: McpCounts = { searches: 0, fetches: 0, searchErrors: 0, fetchErrors: 0 };
+  const evidence: EvidenceEntry[] = [];
   const rl = readline.createInterface({ input: process.stdin, terminal: false });
 
   rl.on("line", (line) => {
@@ -133,13 +146,20 @@ export function runMcpStdioServer(adapter: SearchAdapter, countsFile?: string): 
     } catch {
       return;
     }
-    handleMcpRequest(adapter, counts, request)
+    handleMcpRequest(adapter, counts, request, evidence)
       .then((response) => {
         if (countsFile) {
           try {
             fs.writeFileSync(countsFile, JSON.stringify(counts));
           } catch {
             // Best-effort usage reporting only — never fail the tool call over it.
+          }
+        }
+        if (evidenceFile && evidence.length > 0) {
+          try {
+            fs.writeFileSync(evidenceFile, JSON.stringify(evidence));
+          } catch {
+            // Best-effort only, same as countsFile — never fail the tool call over it.
           }
         }
         if (response) process.stdout.write(`${JSON.stringify(response)}\n`);

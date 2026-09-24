@@ -66,6 +66,50 @@ process.stdout.write(JSON.stringify(verdict));
   return scriptPath;
 }
 
+// Same real MCP wiring as writeMcpClientJudge, but its raise cites a quote
+// that never appeared in anything the search tool actually returned — proves
+// validateVerdict rejects fabricated evidence rather than trusting the
+// judge's self-report.
+function writeMcpClientJudgeFabricatingEvidence(dir: string): string {
+  const scriptPath = path.join(dir, "mcp-client-judge-fabricating.mjs");
+  fs.writeFileSync(
+    scriptPath,
+    `
+import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+
+const configPath = process.argv[process.argv.indexOf("--mcp-config") + 1];
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+const server = config.mcpServers.pawpie;
+
+const requests =
+  '{"jsonrpc":"2.0","id":1,"method":"initialize"}\\n' +
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search","arguments":{"query":"anything"}}}\\n';
+
+spawnSync(server.command, server.args, { env: { ...process.env, ...server.env }, input: requests, encoding: "utf8" });
+
+const verdict = {
+  outcome: "raised",
+  raises: [
+    {
+      pass: 2,
+      question: "new-options",
+      note: "invented",
+      evidence: { source: "https://example.com/found", quote: "this exact sentence was never returned by any search hit" },
+    },
+  ],
+  extractedClaims: [],
+  checkedClaims: [{ text: "bun hardlinks packages from a global cache", disposition: "taken" }],
+  unchecked: [],
+};
+
+process.stdout.write(JSON.stringify(verdict));
+`,
+    "utf8",
+  );
+  return scriptPath;
+}
+
 function fixtureFile(dir: string, title: string): string {
   const fixturePath = path.join(dir, "fixture.json");
   fs.writeFileSync(
@@ -131,6 +175,28 @@ describe("integration: fixture adapter -> real MCP server -> a judge that actual
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.outcome).toBe("clear");
+  });
+
+  test("a raise quoting text no search call actually returned is rejected as judge-failed", () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-integration-"));
+    const judgeScript = writeMcpClientJudgeFabricatingEvidence(workDir);
+    const fixture = fixtureFile(workDir, "nothing interesting here");
+
+    const repo = makeTempRepo();
+    writeAdrFile(
+      repo,
+      "0001-use-bun.md",
+      "# 0001. Use bun for the toolchain\n\n- **Date:** 2026-01-01\n\n## Problem\n\nwhich javascript package manager to standardize on\n\n## Decision\n\n## Claims\n\n- [taken] bun hardlinks packages from a global cache — https://bun.sh/docs/install/cache\n",
+    );
+
+    const result = runRecheck(repo, "0001", {
+      env: { ...process.env, PAWPIE_JUDGE_CMD: `node ${judgeScript}`, PAWPIE_SEARCH_FIXTURE: fixture },
+      selfCommand: [process.execPath, path.resolve(import.meta.dirname, "..", "src", "cli.ts")],
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
   });
 
   const bundle = path.resolve(import.meta.dirname, "..", "bin", "pawpie.mjs");

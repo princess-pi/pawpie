@@ -58,8 +58,10 @@ argument, is a usage error (exit 2) rather than being read as a positional argum
 A decision record carries the date it was made, the original question (`## Problem`), the
 decision, and the claims behind it (`## Claims`) — every claim researched, for the road taken and
 for every road not taken. A punch runs **two passes** against that record, handing the judge a
-small search interface (`search`, `fetch_url`) and letting it drive its own research —
-vendor/official sources first, then free APIs, then a broader web search. **There is no cost cap**
+small search interface (`search`, `fetch_url`) and letting it drive its own research. Both tools
+are the same paid EXA call regardless of what they return, so there is no cheaper tier to prefer —
+the judge is told to try a targeted query against a vendor's own docs or changelog first, since
+that usually settles a claim in fewer calls than a broad web search does. **There is no cost cap**
 — the judge decides how much research a decision needs, the same way the original decision was
 researched.
 
@@ -88,7 +90,11 @@ questions about `## Problem`:
 Either pass can raise. **Every raise names its pass**, plus either the claim (pass 1) or which of
 the four questions (pass 2), and carries evidence — a source (a URL, or a repo artifact such as
 `README.md` or `issue #12`) and a direct quote — and never a recommendation: `recheck`/`punch`
-never re-decides. Questions 3 and 4 need input the web cannot supply — question 3 the host's agent
+never re-decides. A raise citing a URL is checked, not trusted: the MCP server records every URL
+and text the search tools actually returned, and a raise whose source was never searched, or whose
+quote appears in no text actually returned for it, is rejected as `judge-failed`. A repo-artifact
+source (`README.md`, `issue #12`) is exempt from that check — it never goes through the search
+tools. Questions 3 and 4 need input the web cannot supply — question 3 the host's agent
 capabilities, question 4 this repo's own state (README and open issues); when that input is
 unavailable, the affected question is reported as **`unchecked`**, never folded into "no change".
 
@@ -98,9 +104,11 @@ Exactly one line is appended to `docs/adr/recheck.tsv` per run, whether the outc
 **Search backend:** EXA, read from `EXA_API_KEY` in the environment — never from a file in this
 repo. **Judge:** a harness CLI shelled out to in print mode, default
 `claude -p --model opus --effort medium`, overridable with `PAWPIE_JUDGE_CMD` (so a Pi or Codex
-user can swap it) as long as the replacement understands `--mcp-config <file>` the way Claude Code
-does — pawpie hands the judge its search tools over MCP, spawned as `pawpie`'s own hidden
-`__mcp-serve` subcommand, and holds no model key of its own. `--json` reports what the judge
+user can swap it) as long as the replacement understands `--mcp-config <file> --strict-mcp-config
+--allowedTools <tool names>` the way Claude Code's `claude -p` does (all three are always appended)
+— pawpie hands the judge its search tools over MCP, spawned as `pawpie`'s own hidden
+`__mcp-serve` subcommand, and holds no model key of its own. A replacement CLI that rejects an
+unknown flag fails every run as `judge-failed` (exit 1). `--json` reports what the judge
 actually used (`usage.searches`, `usage.fetches`, `usage.judgeCalls`) — it never limits it.
 
 ## v0 known limits
@@ -150,10 +158,12 @@ actually used (`usage.searches`, `usage.fetches`, `usage.judgeCalls`) — it nev
   for `new`.
 - **`PAWPIE_JUDGE_CMD` is split on whitespace, not shell-parsed** — a replacement command containing
   a quoted argument with a space in it will not round-trip. It must also understand
-  `--mcp-config <file> --strict-mcp-config`, the way Claude Code's `claude -p` does; a judge CLI
-  with no MCP support can still run, but never calls `search`/`fetch_url`, so `usage.searches` and
-  `usage.fetches` report `null` (unknown) rather than a verified zero, and the verdict rests on
-  whatever the model already knows.
+  `--mcp-config <file> --strict-mcp-config --allowedTools mcp__pawpie__search,mcp__pawpie__fetch_url`,
+  all three of which `runJudge` always appends, the way Claude Code's `claude -p` does; a CLI that
+  errors on an unrecognized flag cannot be used as-is. A judge CLI with MCP support but no
+  tool-approval flag (so it silently denies the tools instead of erroring) can still run, but never
+  calls `search`/`fetch_url`, so `usage.searches` and `usage.fetches` report `null` (unknown) rather
+  than a verified zero, and the verdict rests on whatever the model already knows.
 - **`__mcp-serve` is a subcommand not listed in `--help`** — the MCP search server `recheck`/
   `punch` spawns as a child of the judge process, over its own stdio. It is never meant to be run
   by a human and carries no stability guarantee across versions.
@@ -163,12 +173,12 @@ actually used (`usage.searches`, `usage.fetches`, `usage.judgeCalls`) — it nev
   issues fixture are unavailable; question 3 (`new-make-abilities`) depends only on
   `PAWPIE_AGENT_CAPABILITIES` and is `unchecked` whenever that isn't set. Both are enforced in code
   (`pass2QuestionAvailable` in `src/judge.ts`), not left to the judge's honesty.
-- **`recheck`/`punch` reads the ADR file twice** — once inside `list`'s own directory scan (to
-  gate on `adr.error`/`## Claims`), once to build the judge's prompt — with no lock between them.
-  An edit landing in that window (e.g. `## Problem` deleted) is judged against content the first
-  read never validated. The same class of race `new`'s own known limit above documents for
-  concurrent writers; not fixed for the same reason — a tool meant to be run interactively, one
-  command at a time.
+- **`recheck`/`punch` reads the ADR file twice** — once via `scanAdrDir` (to gate on `adr.error`),
+  once to build the judge's prompt and re-derive `## Claims` — with no lock between them. An edit
+  landing in that window (e.g. `## Problem` deleted) is judged against content the first read never
+  validated, and the claims fed to the judge come from the unvalidated second read, not the gated
+  first one. The same class of race `new`'s own known limit above documents for concurrent writers;
+  not fixed for the same reason — a tool meant to be run interactively, one command at a time.
 
 ## The one writing rule
 
@@ -219,7 +229,12 @@ claim/question, every raise's note is folded onto that one line, tagged with its
 (`pass1:taken`, `pass1:not-taken`, or `pass2:<question>`) and joined with `; ` — the full evidence
 (source and quote) for each raise is only in the `--json` record, not the sidecar row. When a
 pass-2 question went unchecked, the row's note ends with `; unchecked: <question>,<question>` so
-the sidecar itself never reads as "fully clear" for a run that couldn't check everything.
+the sidecar itself never reads as "fully clear" for a run that couldn't check everything. The note
+also ends with `; usage unknown` when the search server never started or its counts couldn't be
+read, or `; every search/fetch call failed` when every attempted call errored — either way a bare
+`clear` row would otherwise be indistinguishable from a fully researched one. A run served by
+`PAWPIE_SEARCH_FIXTURE` (a test, or a leaked test env var in a real run) ends the note with
+`; backend:fixture` — the only durable, committed signal that it happened.
 
 ## Known input shapes
 
@@ -252,8 +267,10 @@ guarantee.
 `pawpie-recheck@1` covers two shapes, told apart by `ok`:
 
 - **`ok: true`** — `id`, `outcome` (`clear` or `raised`), `raises[]` (each with `pass` of `1` or
-  `2`; a pass-1 raise carries `claim: {text, disposition}` and must name one of the ADR's own
-  recorded claims — a judge answer naming any other claim is rejected as `judge-failed`; a pass-2
+  `2`; a pass-1 raise carries `claim: {text, disposition}` and must name one of the claims pass 1
+  actually iterated — the ADR's own recorded claims, or, for a prose-only ADR with no usable
+  `## Claims`, the judge's own `extractedClaims` — a judge answer naming any other claim is
+  rejected as `judge-failed`; a pass-2
   raise carries `question` of `new-options` / `changed-capabilities` / `new-make-abilities` /
   `changed-spec`, rejected the same way if its input was unavailable; both carry `note` and
   `evidence: {source, quote}`, both required non-empty), `extractedClaims[]` (each
@@ -264,7 +281,10 @@ guarantee.
   fetchErrors, judgeCalls}` (`searches`/`fetches`/`searchErrors`/`fetchErrors` are `null`, never a
   false `0`, when the count is genuinely unknown — the search server never started, or its counts
   file never wrote or came back malformed; a failed search/fetch call increments its `*Errors`
-  count separately from the successful-call count), `exitCode` (0 clear, 10 raised).
+  count separately from the successful-call count), `backend` (`"fixture"` or `"exa"` — which
+  search backend actually served this run; `PAWPIE_SEARCH_FIXTURE` silently takes priority over
+  `EXA_API_KEY` when both are set, so this is the only signal that happened), `exitCode` (0 clear,
+  10 raised).
 - **`ok: false`** — `id` (`null` when none was given), `message`, `exitCode` (2 or 1), and `reason`
   of `missing-id` / `usage-error` / `adr-dir-unreadable` / `adr-file-unreadable` / `adr-not-found` /
   `adr-invalid` / `search-not-configured` / `pass2-context-unreadable` (exit 2), or `judge-failed` /

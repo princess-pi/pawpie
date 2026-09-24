@@ -14,6 +14,7 @@ import {
   type RecheckRefusal,
 } from "./recheck.ts";
 import { runMcpStdioServer } from "./mcp-server.ts";
+import { sanitizeForTerminal } from "./terminal.ts";
 
 const HELP = `pawpie — re-triage decision records (ADRs) when the world moves
 
@@ -42,8 +43,8 @@ Exit codes:
       unreadable ADR directory/sidecar for 'list', an unwritable ADR
       directory for 'new' (or an unreadable ADR directory/sidecar, naming
       that path instead), or recheck/punch with no id, an unreadable ADR
-      directory, an unknown id, an ADR that already fails its own 'list'
-      checks, no search backend configured, or an unreadable/malformed
+      directory or file, an unknown id, an ADR that already fails its own
+      'list' checks, no search backend configured, or an unreadable/malformed
       PAWPIE_SEARCH_FIXTURE or pass-2 context file
   3   an ADR is present and checks nothing: no ## Problem, no date in any
       known shape, unreadable, or a duplicate number — also returned by
@@ -193,8 +194,8 @@ function renderVerdictText(
     stdout(`${id}: raised`);
     for (const raise of verdict.raises) {
       const label = raise.pass === 1 ? `pass 1, ${raise.claim.disposition} claim` : `pass 2, ${raise.question}`;
-      stdout(`  [${label}] ${raise.note}`);
-      stdout(`    ${raise.evidence.source} — "${raise.evidence.quote}"`);
+      stdout(`  [${label}] ${sanitizeForTerminal(raise.note)}`);
+      stdout(`    ${sanitizeForTerminal(raise.evidence.source)} — "${sanitizeForTerminal(raise.evidence.quote)}"`);
     }
   }
   // Printed for "clear" too — a quiet run is never read as "everything is
@@ -247,7 +248,8 @@ function runRecheckCommand(
 
   if (json) stdout(JSON.stringify(result));
   else if (!result.ok) {
-    stderr(`pawpie: ${result.message}`);
+    // judge-failed's message can embed the judge process's own stderr.
+    stderr(`pawpie: ${sanitizeForTerminal(result.message)}`);
     // sidecar-unwritable still carries a completed, uncapped research run —
     // print it rather than dropping every raise on the floor.
     if (result.verdict) renderVerdictText(result.id ?? "?", result.verdict, stdout);
@@ -293,10 +295,11 @@ function isMainModule(): boolean {
 
 // Not in --help, and not meant for a human to type: this is the MCP search
 // server judge.ts spawns as a child of the judge command, over its own
-// stdio. It never returns — it runs until stdin closes.
+// stdio. It returns immediately, but the readline listener it registers
+// keeps the process alive until stdin closes.
 function runMcpServeEntry(): void {
   const adapter = createSearchAdapterFromEnv(process.env);
-  runMcpStdioServer(adapter, process.env.PAWPIE_MCP_COUNTS_FILE);
+  runMcpStdioServer(adapter, process.env.PAWPIE_MCP_COUNTS_FILE, process.env.PAWPIE_MCP_EVIDENCE_FILE);
 }
 
 if (isMainModule()) {

@@ -73,7 +73,10 @@ there about as often as you commit.
   implementation, and the fixture adapter tests use.
 - `src/mcp-server.ts` — the JSON-RPC/stdio MCP server exposing `search`/`fetch_url` to the judge;
   `handleMcpRequest` is the pure, unit-testable core, `runMcpStdioServer` the stdio wrapper the
-  hidden `__mcp-serve` subcommand runs.
+  hidden `__mcp-serve` subcommand runs. Also logs every URL/text a call actually returned, so
+  `judge.ts` can reject a raise whose evidence was never returned this run.
+- `src/terminal.ts` — `sanitizeForTerminal`, shared by `list.ts` and `cli.ts` to strip control
+  characters from any web-sourced or file-sourced text before it reaches a terminal.
 - `src/errors.ts` — `ReadFailure` (wraps a read error with the path that failed) and
   `errorCode()`, used by `cli.ts`, `list.ts`, and `adr.ts` to tell an unreadable path from
   a missing one.

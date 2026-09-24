@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Claim } from "./adr.ts";
+import type { EvidenceEntry } from "./mcp-server.ts";
 
 export type Disposition = "taken" | "not-taken";
 
@@ -120,9 +121,11 @@ extracted.`
 
   return `You are pawpie's judge. You re-triage ADR ${adrId} against today's world, in two passes. \
 You never recommend a replacement decision and never re-decide — pawpie's whole job is triage, not \
-choice. Use the "search" and "fetch_url" tools as many times as you need, working down a cost \
-ladder — vendor/official sources first, then free APIs, then a broader web search; there is no \
-cost cap, so keep going until you are satisfied.
+choice. Use the "search" and "fetch_url" tools as many times as you need. Both tools cost the same \
+regardless of what they return, so there is no cheaper tier to prefer — but a targeted query \
+against a vendor's own docs or changelog usually settles a claim in fewer calls than a broad web \
+search does, so try the specific source first. There is no cost cap, so keep going until you are \
+satisfied.
 
 PASS 1 — iterate the claims. ${claimsSection}
 For each claim, check whether it still holds or has changed since the ADR's date. This covers the \
@@ -207,8 +210,19 @@ function claimKey(c: ClaimRef): string {
 // `## Claims` list, or null when the judge was told to extract its own.
 // `pass2` is what pass 2 was actually given, used to reject a raise the
 // judge could not honestly have evidence for and to force-report a question
-// as unchecked regardless of what the judge itself claims.
-function validateVerdict(doc: unknown, recordedClaims: Claim[] | null, pass2: Pass2Context): JudgeVerdict {
+// as unchecked regardless of what the judge itself claims. `evidenceLog` is
+// every URL/text the search tools actually returned this run (null when the
+// MCP server never started, so nothing web-sourced can be checked) — used to
+// reject a raise whose evidence cites a URL never searched, or a quote that
+// appears in no text actually returned for it. Repo-artifact sources (a
+// pass-2 raise citing README.md, for example) are never web-sourced and are
+// exempt: only a raise whose evidence.source looks like a URL is checked.
+function validateVerdict(
+  doc: unknown,
+  recordedClaims: Claim[] | null,
+  pass2: Pass2Context,
+  evidenceLog: EvidenceEntry[] | null,
+): JudgeVerdict {
   if (typeof doc !== "object" || doc === null) throw new JudgeError("judge verdict is not an object");
   const d = doc as Record<string, unknown>;
   if (d.outcome !== "raised" && d.outcome !== "clear") {
@@ -251,6 +265,15 @@ function validateVerdict(doc: unknown, recordedClaims: Claim[] | null, pass2: Pa
     ) {
       throw new JudgeError(`raise[${i}] is missing a non-empty evidence.source or evidence.quote`);
     }
+    if (evidenceLog !== null && /^https?:\/\//.test(evidence.source)) {
+      const fromThatUrl = evidenceLog.filter((e) => e.url === evidence.source);
+      if (fromThatUrl.length === 0) {
+        throw new JudgeError(`raise[${i}].evidence.source (${evidence.source}) was never returned by search/fetch_url this run`);
+      }
+      if (!fromThatUrl.some((e) => e.text.includes(evidence.quote as string))) {
+        throw new JudgeError(`raise[${i}].evidence.quote does not appear in what ${evidence.source} actually returned`);
+      }
+    }
     const note = typeof raise.note === "string" ? raise.note : "";
     if (raise.pass === 1) {
       const claim = validateClaimRef(raise.claim, `raise[${i}].claim`);
@@ -282,6 +305,11 @@ function validateVerdict(doc: unknown, recordedClaims: Claim[] | null, pass2: Pa
   for (const key of iteratedKeys) {
     if (!checkedKeys.has(key)) {
       throw new JudgeError(`"checkedClaims" is missing a claim pass 1 was supposed to iterate: ${key}`);
+    }
+  }
+  for (const key of checkedKeys) {
+    if (!iteratedKeys.has(key)) {
+      throw new JudgeError(`"checkedClaims" names a claim that was never on the iterated list: ${key}`);
     }
   }
 
@@ -319,6 +347,7 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
   const selfCommand = opts.selfCommand ?? [process.execPath, process.argv[1] ?? ""];
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-judge-"));
   const countsFile = path.join(workDir, "counts.json");
+  const evidenceFile = path.join(workDir, "evidence.json");
   const mcpConfigFile = path.join(workDir, "mcp-config.json");
 
   fs.writeFileSync(
@@ -328,7 +357,11 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
         pawpie: {
           command: selfCommand[0],
           args: [...selfCommand.slice(1), "__mcp-serve"],
-          env: { ...(opts.searchAdapterEnv ?? {}), PAWPIE_MCP_COUNTS_FILE: countsFile },
+          env: {
+            ...(opts.searchAdapterEnv ?? {}),
+            PAWPIE_MCP_COUNTS_FILE: countsFile,
+            PAWPIE_MCP_EVIDENCE_FILE: evidenceFile,
+          },
         },
       },
     }),
@@ -362,7 +395,18 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
     }
     const stdout = child.stdout ?? "";
 
-    const verdict = validateVerdict(extractJson(stdout), opts.claims ?? null, pass2);
+    let evidenceLog: EvidenceEntry[] | null = null;
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(evidenceFile, "utf8"));
+      if (Array.isArray(parsed) && parsed.every((e) => typeof e?.url === "string" && typeof e?.text === "string")) {
+        evidenceLog = parsed as EvidenceEntry[];
+      }
+    } catch {
+      // Missing/malformed: the server never wrote it (no search/fetch calls
+      // this run, or it never started) — nothing web-sourced can be checked.
+    }
+
+    const verdict = validateVerdict(extractJson(stdout), opts.claims ?? null, pass2, evidenceLog);
 
     let usage: JudgeUsage = { searches: null, fetches: null, searchErrors: null, fetchErrors: null, judgeCalls: 1 };
     try {
@@ -387,9 +431,10 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
       // A present-but-malformed counts file is treated the same as a
       // missing one — null, unknown — rather than trusting a partial shape.
     } catch {
-      // The judge may have answered with no tool calls, or with a judge
-      // command that never started the MCP search server — usage then
-      // honestly reports unknown (null) rather than a verified zero.
+      // The counts file is missing or unreadable — the judge command never
+      // started the MCP search server at all (a server that starts and
+      // merely never calls a tool still writes a verified 0, above). Usage
+      // then honestly reports unknown (null) rather than a false zero.
     }
 
     return { verdict, usage };

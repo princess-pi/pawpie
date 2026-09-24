@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { UNFILLED_PROBLEM_PLACEHOLDER } from "../src/adr.ts";
 import { refuseMissingId, runRecheck } from "../src/recheck.ts";
 import { adrDirOf, fakeJudgeEnv, makeTempRepo, writeAdrFile } from "./support.ts";
 
@@ -112,6 +113,29 @@ describe("pawpie recheck/punch — refusals", () => {
     if (result.ok) return;
     expect(result.reason).toBe("adr-invalid");
     expect(result.exitCode).toBe(2);
+  });
+
+  test("refuses a freshly created ADR whose ## Problem still holds the unfilled template placeholder", () => {
+    const repo = makeTempRepo();
+    writeAdrFile(
+      repo,
+      "0001-fresh.md",
+      `# 0001. Fresh\n\n- **Date:** 2026-01-01\n\n## Problem\n\n${UNFILLED_PROBLEM_PLACEHOLDER}\n\n## Decision\n`,
+    );
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(CLEAR_VERDICT) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("adr-invalid");
+    expect(result.exitCode).toBe(2);
+  });
+
+  test("reports which search backend served the run", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(CLEAR_VERDICT) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.backend).toBe("fixture");
   });
 
   test("a numeric id is normalized the same way the sidecar normalizes it", () => {
@@ -240,9 +264,9 @@ describe("pawpie recheck/punch — refusals", () => {
     expect(result.exitCode).toBe(2);
   });
 
-  test("a sidecar-unwritable refusal still carries the judge's completed verdict", () => {
-    const isRoot = process.getuid !== undefined && process.getuid() === 0;
-    if (isRoot) return;
+  const isRoot = process.getuid !== undefined && process.getuid() === 0;
+
+  test.skipIf(isRoot)("a sidecar-unwritable refusal still carries the judge's completed verdict", () => {
     const repo = makeTempRepo();
     seedAdr(repo);
     fs.writeFileSync(path.join(adrDirOf(repo), "recheck.tsv"), "");
@@ -259,9 +283,7 @@ describe("pawpie recheck/punch — refusals", () => {
     expect(result.verdict?.raises).toHaveLength(1);
   });
 
-  test("refuses with a distinct reason when docs/adr/ itself is unreadable", () => {
-    const isRoot = process.getuid !== undefined && process.getuid() === 0;
-    if (isRoot) return; // root bypasses permission bits
+  test.skipIf(isRoot)("refuses with a distinct reason when docs/adr/ itself is unreadable", () => {
     const repo = makeTempRepo();
     seedAdr(repo);
     fs.chmodSync(adrDirOf(repo), 0o000);
@@ -491,7 +513,9 @@ describe("pawpie recheck/punch — the sidecar", () => {
     expect(outcome).toBe("raised");
     // "new-make-abilities"/"changed-spec" are force-reported unchecked here
     // too — this repo has no README and no PAWPIE_AGENT_CAPABILITIES set.
-    expect(note).toBe("pass1:taken found X; pass2:changed-capabilities price dropped; unchecked: new-make-abilities,changed-spec");
+    expect(note).toBe(
+      "pass1:taken found X; pass2:changed-capabilities price dropped; unchecked: new-make-abilities,changed-spec; usage unknown; backend:fixture",
+    );
   });
 
   test("reports usage as unknown (null), never a false zero, for a judge that never starts the MCP server", () => {

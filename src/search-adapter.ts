@@ -61,7 +61,12 @@ export function createExaAdapter(apiKey: string): SearchAdapter {
         throw new Error(`EXA fetch failed: ${res.status} ${res.statusText}`);
       }
       const doc = (await res.json()) as { results?: Array<{ text?: string }> };
-      return doc.results?.[0]?.text ?? "";
+      const text = doc.results?.[0]?.text;
+      // No text back is a failed fetch (EXA could not retrieve the URL), not
+      // a page that is legitimately empty — counted as fetchErrors, not a
+      // successful call that silently hands the judge nothing.
+      if (!text) throw new Error(`EXA fetch returned no content for ${url}`);
+      return text;
     },
   };
 }
