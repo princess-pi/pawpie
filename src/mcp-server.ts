@@ -155,11 +155,10 @@ export function runMcpStdioServer(adapter: SearchAdapter, countsFile?: string, e
           }
         }
         if (evidenceFile) {
-          // Written every request, even as `[]` — judge.ts must be able to
-          // tell "the server started but returned nothing" apart from
-          // "the server never started at all", and only the latter should
-          // ever be treated differently by a caller (it isn't, currently:
-          // both mean "nothing to check a URL-sourced raise against").
+          // Written every request, even as `[]` — judge.ts treats a missing
+          // file (the server never started) the same as an empty one (it
+          // started but returned nothing): either way there is nothing to
+          // check a URL-sourced raise against.
           try {
             fs.writeFileSync(evidenceFile, JSON.stringify(evidence));
           } catch {

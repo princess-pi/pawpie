@@ -46,7 +46,7 @@ npx --yes @princess-pi/pawpie <command>
 | `pawpie` (also `--help` / `-h`) | prints help, runs nothing | — |
 | `pawpie list [path] [--json]` | every ADR with its date and last check, oldest check first, never-checked at the top | no network, no tokens |
 | `pawpie new "<title>" [path]` | next free number, a template with `## Problem` and one date line | local |
-| `pawpie recheck <id> [path] [--json]` (alias `pawpie punch <id> [path] [--json]`) | searches the world for decision `<id>`, raises with evidence or stays quiet, appends one `recheck.tsv` row | a search backend (EXA) plus one judge model call — no cap |
+| `pawpie recheck <id> [path] [--json]` (alias `pawpie punch <id> [path] [--json]`) | searches the world for decision `<id>`, raises with evidence or stays quiet, appends one `recheck.tsv` row on success | a search backend (EXA) plus one judge model call — no cap |
 
 `path` defaults to the current directory. ADRs live under `<path>/docs/adr/`. `list` refuses when
 that directory is missing; `new` creates it. An unrecognized flag — any `-` or `--` token the
@@ -93,13 +93,16 @@ the four questions (pass 2), and carries evidence — a source (a URL, or a repo
 never re-decides. A raise citing a URL is checked, not trusted: the MCP server records every URL
 and text the search tools actually returned, and a raise whose source was never searched, or whose
 quote appears in no text actually returned for it, is rejected as `judge-failed`. A repo-artifact
-source (`README.md`, `issue #12`) is exempt from that check — it never goes through the search
-tools. Questions 3 and 4 need input the web cannot supply — question 3 the host's agent
+source (`README.md`, `issue #<n>`, `agent skills list`) never goes through the search tools, so it
+is checked differently, not skipped: the quote must appear in that artifact's own text, the one
+pawpie actually supplied this run; any other non-URL source is rejected outright. Questions 3 and 4
+need input the web cannot supply — question 3 the host's agent
 capabilities, question 4 this repo's own state (README and open issues); when that input is
 unavailable, the affected question is reported as **`unchecked`**, never folded into "no change".
 
-Exactly one line is appended to `docs/adr/recheck.tsv` per run, whether the outcome is `raised` or
-`clear`. The ADR file itself is never touched.
+Exactly one line is appended to `docs/adr/recheck.tsv` per run that reaches a verdict, whether the
+outcome is `raised` or `clear` — a refusal (`judge-failed`, `adr-invalid`, `search-not-configured`,
+...) appends nothing. The ADR file itself is never touched.
 
 **Search backend:** EXA, read from `EXA_API_KEY` in the environment — never from a file in this
 repo. **Judge:** a harness CLI shelled out to in print mode, default
@@ -161,9 +164,12 @@ actually used (`usage.searches`, `usage.fetches`, `usage.judgeCalls`) — it nev
   `--mcp-config <file> --strict-mcp-config --allowedTools mcp__pawpie__search,mcp__pawpie__fetch_url`,
   all three of which `runJudge` always appends, the way Claude Code's `claude -p` does; a CLI that
   errors on an unrecognized flag cannot be used as-is. A judge CLI with MCP support but no
-  tool-approval flag (so it silently denies the tools instead of erroring) can still run, but never
-  calls `search`/`fetch_url`, so `usage.searches` and `usage.fetches` report `null` (unknown) rather
-  than a verified zero, and the verdict rests on whatever the model already knows.
+  tool-approval flag (so it silently denies the tools instead of erroring) never calls
+  `search`/`fetch_url`, and the verdict rests on whatever the model already knows — but if it still
+  starts the pawpie MCP server (even just to list its tools before denying them), that server
+  writes a verified `{searches: 0, ...}`, the same as a judge that started the server and simply
+  chose not to search. `usage.searches`/`usage.fetches` report `null` (unknown) only when the
+  server never started at all.
 - **`__mcp-serve` is a subcommand not listed in `--help`** — the MCP search server `recheck`/
   `punch` spawns as a child of the judge process, over its own stdio. It is never meant to be run
   by a human and carries no stability guarantee across versions.

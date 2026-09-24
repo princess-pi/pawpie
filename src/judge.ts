@@ -395,8 +395,12 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
     // file exists for validateVerdict to check web-sourced evidence against.
     // Pre-seeding it here lets a test assert a URL-sourced raise the same way
     // production evidence-checking would — never read from PAWPIE_JUDGE_CMD
-    // itself, which stays a real, unmodified CLI invocation.
-    if (env.PAWPIE_TEST_PRESET_EVIDENCE) {
+    // itself, which stays a real, unmodified CLI invocation. Gated on
+    // PAWPIE_SEARCH_FIXTURE (test/fixture mode) too, so a leaked
+    // PAWPIE_TEST_PRESET_EVIDENCE has no effect on a real, EXA-backed run —
+    // the same shape searchAdapterEnv already uses to keep a real run from
+    // silently using the fixture backend.
+    if (env.PAWPIE_TEST_PRESET_EVIDENCE && env.PAWPIE_SEARCH_FIXTURE) {
       fs.writeFileSync(evidenceFile, env.PAWPIE_TEST_PRESET_EVIDENCE);
     }
 
@@ -427,7 +431,7 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
     // Missing or malformed collapses to `[]`, the same as a server that
     // started and genuinely returned nothing — either way there is nothing
     // to check a URL-sourced raise against, so it must be rejected, not
-    // waved through because the log "wasn't there to check" (f-3df1bdfd).
+    // waved through because the log "wasn't there to check".
     let evidenceLog: EvidenceEntry[] = [];
     try {
       const parsed: unknown = JSON.parse(fs.readFileSync(evidenceFile, "utf8"));

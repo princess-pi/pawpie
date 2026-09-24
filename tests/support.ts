@@ -61,8 +61,15 @@ export function fakeJudgeEnv(
   const fixturePath = path.join(dir, "unused-fixture.json");
   fs.writeFileSync(fixturePath, JSON.stringify({ results: [] }), "utf8");
 
+  const env = { ...process.env };
+  // A developer or CI shell exporting either of these would silently change
+  // which pass-2 questions tests expect as unchecked — tests must control
+  // this input explicitly (by setting it themselves), not inherit it.
+  delete env.PAWPIE_AGENT_CAPABILITIES;
+  delete env.PAWPIE_PASS2_ISSUES_FIXTURE;
+
   return {
-    ...process.env,
+    ...env,
     PAWPIE_JUDGE_CMD: `node ${scriptPath}`,
     PAWPIE_TEST_VERDICT: typeof verdict === "string" ? verdict : JSON.stringify(verdict),
     PAWPIE_SEARCH_FIXTURE: fixturePath,
