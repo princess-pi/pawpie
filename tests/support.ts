@@ -22,12 +22,30 @@ export function writeSidecar(repoPath: string, lines: string[]): void {
   fs.writeFileSync(path.join(dir, "recheck.tsv"), lines.join("\n") + "\n", "utf8");
 }
 
+// The URLs/quotes every existing fakeJudgeEnv-based test's canned verdict
+// cites as evidence — a fake judge never starts the real MCP server, so
+// there is no genuine evidence log for validateVerdict's URL-sourced check
+// to run against; this seeds one (via PAWPIE_TEST_PRESET_EVIDENCE, read only
+// by judge.ts's own test-only seam) so those raises validate the same way a
+// real run's would. A test citing a URL not covered here needs its own
+// `evidence` argument.
+const DEFAULT_PRESET_EVIDENCE = [
+  { url: "https://example.com/evidence", text: "this changed" },
+  { url: "https://a", text: "q1" },
+  { url: "https://b", text: "q2" },
+];
+
 // Writes a throwaway node script that ignores its input entirely and prints
 // a canned verdict to stdout, then returns the env to run recheck/punch
 // against it — the fake judge required by the workflow's "never call the
 // real judge in a test" rule. `exitCode` lets a test simulate a judge that
-// fails outright.
-export function fakeJudgeEnv(verdict: unknown, exitCode = 0): NodeJS.ProcessEnv {
+// fails outright. `evidence` overrides the default preset evidence log a
+// URL-sourced raise in `verdict` is checked against.
+export function fakeJudgeEnv(
+  verdict: unknown,
+  exitCode = 0,
+  evidence: { url: string; text: string }[] = DEFAULT_PRESET_EVIDENCE,
+): NodeJS.ProcessEnv {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-fake-judge-"));
   const scriptPath = path.join(dir, "judge.mjs");
   const body =
@@ -48,6 +66,7 @@ export function fakeJudgeEnv(verdict: unknown, exitCode = 0): NodeJS.ProcessEnv 
     PAWPIE_JUDGE_CMD: `node ${scriptPath}`,
     PAWPIE_TEST_VERDICT: typeof verdict === "string" ? verdict : JSON.stringify(verdict),
     PAWPIE_SEARCH_FIXTURE: fixturePath,
+    PAWPIE_TEST_PRESET_EVIDENCE: JSON.stringify(evidence),
   };
 }
 

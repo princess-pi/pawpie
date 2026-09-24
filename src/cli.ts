@@ -44,8 +44,9 @@ Exit codes:
       directory for 'new' (or an unreadable ADR directory/sidecar, naming
       that path instead), or recheck/punch with no id, an unreadable ADR
       directory or file, an unknown id, an ADR that already fails its own
-      'list' checks, no search backend configured, or an unreadable/malformed
-      PAWPIE_SEARCH_FIXTURE or pass-2 context file
+      'list' checks or still holds 'new''s unfilled ## Problem placeholder
+      (an ADR 'list' itself accepts), no search backend configured, or an
+      unreadable/malformed PAWPIE_SEARCH_FIXTURE or pass-2 context file
   3   an ADR is present and checks nothing: no ## Problem, no date in any
       known shape, unreadable, or a duplicate number — also returned by
       'new' when the directory already has a duplicate number

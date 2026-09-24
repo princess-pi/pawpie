@@ -527,3 +527,82 @@ describe("pawpie recheck/punch — the sidecar", () => {
     expect(result.usage).toEqual({ searches: null, fetches: null, searchErrors: null, fetchErrors: null, judgeCalls: 1 });
   });
 });
+
+describe("pawpie recheck/punch — evidence is checked, not trusted", () => {
+  test("a URL-sourced raise citing a source no search/fetch call returned is rejected", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    // No preset evidence at all — the fake judge never started a real MCP
+    // server, so this URL was never actually returned by anything.
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(pass1Raise("taken"), 0, []) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
+  });
+
+  test("a URL-sourced raise whose quote does not appear in what that URL actually returned is rejected", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const result = runRecheck(repo, "0001", {
+      env: fakeJudgeEnv(pass1Raise("taken"), 0, [{ url: "https://example.com/evidence", text: "unrelated text" }]),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
+  });
+
+  test("a raise citing a source that is neither a URL nor a recognized repo artifact is rejected", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const verdict = {
+      ...pass1Raise("taken"),
+      raises: [{ ...pass1Raise("taken").raises[0], evidence: { source: "my own knowledge", quote: "this changed" } }],
+    };
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(verdict) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
+  });
+
+  test("a raise citing README.md is checked against the README this run actually supplied", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    fs.writeFileSync(path.join(repo, "README.md"), "this repo now requires node 24", "utf8");
+    const verdict = {
+      ...pass2Raise("changed-spec"),
+      raises: [
+        {
+          pass: 2,
+          question: "changed-spec",
+          note: "spec moved",
+          evidence: { source: "README.md", quote: "requires node 24" },
+        },
+      ],
+    };
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(verdict) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.outcome).toBe("raised");
+  });
+
+  test("a raise citing README.md with a quote the README never contained is rejected", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    fs.writeFileSync(path.join(repo, "README.md"), "this repo now requires node 24", "utf8");
+    const verdict = {
+      ...pass2Raise("changed-spec"),
+      raises: [
+        {
+          pass: 2,
+          question: "changed-spec",
+          note: "spec moved",
+          evidence: { source: "README.md", quote: "a quote the README never had" },
+        },
+      ],
+    };
+    const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(verdict) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
+  });
+});

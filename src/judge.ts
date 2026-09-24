@@ -206,22 +206,31 @@ function claimKey(c: ClaimRef): string {
   return `${c.disposition}\u0000${c.text}`;
 }
 
+// A source naming a repo artifact pawpie itself supplied — never web-sourced,
+// so it is checked against that artifact's own text instead of evidenceLog.
+// Anything not a URL and not one of these three is not a source pawpie ever
+// told the judge to use, and is rejected outright.
+function pass2ArtifactText(source: string, pass2: Pass2Context): string | null {
+  if (source === "README.md") return pass2.readme;
+  if (/^issue #\d+$/.test(source)) return pass2.openIssues;
+  if (source === "agent skills list") return pass2.agentCapabilities;
+  return null;
+}
+
 // `recordedClaims` is what pass 1 was actually handed: the parsed
 // `## Claims` list, or null when the judge was told to extract its own.
 // `pass2` is what pass 2 was actually given, used to reject a raise the
 // judge could not honestly have evidence for and to force-report a question
 // as unchecked regardless of what the judge itself claims. `evidenceLog` is
-// every URL/text the search tools actually returned this run (null when the
-// MCP server never started, so nothing web-sourced can be checked) — used to
-// reject a raise whose evidence cites a URL never searched, or a quote that
-// appears in no text actually returned for it. Repo-artifact sources (a
-// pass-2 raise citing README.md, for example) are never web-sourced and are
-// exempt: only a raise whose evidence.source looks like a URL is checked.
+// every URL/text the search tools actually returned this run — always an
+// array, `[]` both when the MCP server never started and when it started but
+// returned nothing, since either way there is nothing to check a URL-sourced
+// raise against and it must be rejected the same way in both cases.
 function validateVerdict(
   doc: unknown,
   recordedClaims: Claim[] | null,
   pass2: Pass2Context,
-  evidenceLog: EvidenceEntry[] | null,
+  evidenceLog: EvidenceEntry[],
 ): JudgeVerdict {
   if (typeof doc !== "object" || doc === null) throw new JudgeError("judge verdict is not an object");
   const d = doc as Record<string, unknown>;
@@ -265,13 +274,23 @@ function validateVerdict(
     ) {
       throw new JudgeError(`raise[${i}] is missing a non-empty evidence.source or evidence.quote`);
     }
-    if (evidenceLog !== null && /^https?:\/\//.test(evidence.source)) {
+    if (/^https?:\/\//i.test(evidence.source)) {
       const fromThatUrl = evidenceLog.filter((e) => e.url === evidence.source);
       if (fromThatUrl.length === 0) {
         throw new JudgeError(`raise[${i}].evidence.source (${evidence.source}) was never returned by search/fetch_url this run`);
       }
       if (!fromThatUrl.some((e) => e.text.includes(evidence.quote as string))) {
         throw new JudgeError(`raise[${i}].evidence.quote does not appear in what ${evidence.source} actually returned`);
+      }
+    } else {
+      const artifactText = pass2ArtifactText(evidence.source, pass2);
+      if (artifactText === null) {
+        throw new JudgeError(
+          `raise[${i}].evidence.source (${JSON.stringify(evidence.source)}) is neither a URL nor a recognized repo artifact ("README.md", "issue #<n>", "agent skills list")`,
+        );
+      }
+      if (!artifactText.includes(evidence.quote as string)) {
+        throw new JudgeError(`raise[${i}].evidence.quote does not appear in ${evidence.source}`);
       }
     }
     const note = typeof raise.note === "string" ? raise.note : "";
@@ -346,39 +365,49 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
 
   const selfCommand = opts.selfCommand ?? [process.execPath, process.argv[1] ?? ""];
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-judge-"));
-  const countsFile = path.join(workDir, "counts.json");
-  const evidenceFile = path.join(workDir, "evidence.json");
-  const mcpConfigFile = path.join(workDir, "mcp-config.json");
+  try {
+    const countsFile = path.join(workDir, "counts.json");
+    const evidenceFile = path.join(workDir, "evidence.json");
+    const mcpConfigFile = path.join(workDir, "mcp-config.json");
 
-  fs.writeFileSync(
-    mcpConfigFile,
-    JSON.stringify({
-      mcpServers: {
-        pawpie: {
-          command: selfCommand[0],
-          args: [...selfCommand.slice(1), "__mcp-serve"],
-          env: {
-            ...(opts.searchAdapterEnv ?? {}),
-            PAWPIE_MCP_COUNTS_FILE: countsFile,
-            PAWPIE_MCP_EVIDENCE_FILE: evidenceFile,
+    fs.writeFileSync(
+      mcpConfigFile,
+      JSON.stringify({
+        mcpServers: {
+          pawpie: {
+            command: selfCommand[0],
+            args: [...selfCommand.slice(1), "__mcp-serve"],
+            env: {
+              ...(opts.searchAdapterEnv ?? {}),
+              PAWPIE_MCP_COUNTS_FILE: countsFile,
+              PAWPIE_MCP_EVIDENCE_FILE: evidenceFile,
+            },
           },
         },
-      },
-    }),
-  );
+      }),
+    );
 
-  const pass2: Pass2Context = opts.pass2 ?? { readme: null, openIssues: null, agentCapabilities: null };
-  const prompt = buildPrompt(adrId, adrContent, opts.claims ?? null, pass2);
+    const pass2: Pass2Context = opts.pass2 ?? { readme: null, openIssues: null, agentCapabilities: null };
+    const prompt = buildPrompt(adrId, adrContent, opts.claims ?? null, pass2);
 
-  // In non-interactive print mode, Claude Code (and harnesses that share its
-  // CLI shape) denies any tool not explicitly allowed — with neither an
-  // interactive prompt nor a permission mode granting it, a bare
-  // --mcp-config would let the judge start the server and then never
-  // actually call "search"/"fetch_url", answering from its own knowledge
-  // while still producing a well-formed (and wrong) "clear" verdict.
-  const ALLOWED_TOOLS = "mcp__pawpie__search,mcp__pawpie__fetch_url";
+    // Test-only seam: a fake judge (tests/support.ts's fakeJudgeEnv) prints a
+    // canned verdict without ever spawning __mcp-serve, so no real evidence
+    // file exists for validateVerdict to check web-sourced evidence against.
+    // Pre-seeding it here lets a test assert a URL-sourced raise the same way
+    // production evidence-checking would — never read from PAWPIE_JUDGE_CMD
+    // itself, which stays a real, unmodified CLI invocation.
+    if (env.PAWPIE_TEST_PRESET_EVIDENCE) {
+      fs.writeFileSync(evidenceFile, env.PAWPIE_TEST_PRESET_EVIDENCE);
+    }
 
-  try {
+    // In non-interactive print mode, Claude Code (and harnesses that share its
+    // CLI shape) denies any tool not explicitly allowed — with neither an
+    // interactive prompt nor a permission mode granting it, a bare
+    // --mcp-config would let the judge start the server and then never
+    // actually call "search"/"fetch_url", answering from its own knowledge
+    // while still producing a well-formed (and wrong) "clear" verdict.
+    const ALLOWED_TOOLS = "mcp__pawpie__search,mcp__pawpie__fetch_url";
+
     const child = spawnSync(
       bin,
       [...cmdArgs, "--mcp-config", mcpConfigFile, "--strict-mcp-config", "--allowedTools", ALLOWED_TOOLS],
@@ -395,15 +424,18 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
     }
     const stdout = child.stdout ?? "";
 
-    let evidenceLog: EvidenceEntry[] | null = null;
+    // Missing or malformed collapses to `[]`, the same as a server that
+    // started and genuinely returned nothing — either way there is nothing
+    // to check a URL-sourced raise against, so it must be rejected, not
+    // waved through because the log "wasn't there to check" (f-3df1bdfd).
+    let evidenceLog: EvidenceEntry[] = [];
     try {
       const parsed: unknown = JSON.parse(fs.readFileSync(evidenceFile, "utf8"));
       if (Array.isArray(parsed) && parsed.every((e) => typeof e?.url === "string" && typeof e?.text === "string")) {
         evidenceLog = parsed as EvidenceEntry[];
       }
     } catch {
-      // Missing/malformed: the server never wrote it (no search/fetch calls
-      // this run, or it never started) — nothing web-sourced can be checked.
+      // Missing/malformed — see above.
     }
 
     const verdict = validateVerdict(extractJson(stdout), opts.claims ?? null, pass2, evidenceLog);

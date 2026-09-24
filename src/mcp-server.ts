@@ -14,8 +14,7 @@ export interface McpCounts {
 
 // Every URL/text the search backend actually returned, so validateVerdict
 // (judge.ts) can reject a raise whose evidence cites a URL never searched or
-// a quote that appears in no returned text — "never invent evidence" was
-// previously prompt-only prose with nothing enforcing it.
+// a quote that appears in no returned text.
 export interface EvidenceEntry {
   url: string;
   text: string;
@@ -155,7 +154,12 @@ export function runMcpStdioServer(adapter: SearchAdapter, countsFile?: string, e
             // Best-effort usage reporting only — never fail the tool call over it.
           }
         }
-        if (evidenceFile && evidence.length > 0) {
+        if (evidenceFile) {
+          // Written every request, even as `[]` — judge.ts must be able to
+          // tell "the server started but returned nothing" apart from
+          // "the server never started at all", and only the latter should
+          // ever be treated differently by a caller (it isn't, currently:
+          // both mean "nothing to check a URL-sourced raise against").
           try {
             fs.writeFileSync(evidenceFile, JSON.stringify(evidence));
           } catch {

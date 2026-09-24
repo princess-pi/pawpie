@@ -103,8 +103,8 @@ function appendSidecarLine(adrDir: string, id: string, outcome: "raised" | "clea
   fs.appendFileSync(sidecarPath, row, "utf8");
 }
 
-// A committed sidecar row is the only durable record of a run — the
-// error/null counts above only reach --json. A bare "clear" here would be
+// A committed sidecar row is the only durable record of a run — JudgeUsage's
+// error/null counts only reach --json. A bare "clear" here would be
 // indistinguishable from a fully researched one, so a run where research
 // plainly did not happen (usage unknown, or every attempted call failed)
 // says so in the row itself.
@@ -142,12 +142,12 @@ function claimsFor(adrContent: string): Claim[] | null {
 // included — there is no GitHub check, and none is needed for a local file);
 // open issues and agent capabilities have no live lookup yet in v0 and come
 // only from an explicitly configured fixture path. Missing input reaches the
-// judge as UNAVAILABLE. A read failure — a missing README, or an explicitly
-// set path that can't be read — is a misconfiguration, not "unavailable": it
-// propagates, and runRecheck turns it into a pass2-context-unreadable
-// refusal instead of a silent null. Only ENOENT on the (never explicitly
-// set) README path is read as "unavailable", since a repo with no README at
-// all is an ordinary, expected case.
+// judge as UNAVAILABLE. Only ENOENT on the README path is read that way,
+// since a repo with no README at all is an ordinary, expected case. Any
+// other read failure — an explicitly set path that can't be read, or a
+// README that exists but genuinely can't be read (EACCES, EISDIR) — is a
+// misconfiguration, not "unavailable": it propagates, and runRecheck turns
+// it into a pass2-context-unreadable refusal instead of a silent null.
 function gatherPass2Context(repoPath: string, env: NodeJS.ProcessEnv): Pass2Context {
   let readme: string | null = null;
   try {
@@ -288,7 +288,7 @@ export function runRecheck(
       ok: false,
       reason: "pass2-context-unreadable",
       id,
-      message: `a configured pass-2 context file could not be read: ${(err as Error).message}`,
+      message: `a pass-2 context file could not be read: ${(err as Error).message}`,
       exitCode: 2,
     };
   }

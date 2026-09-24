@@ -29,7 +29,9 @@ there about as often as you commit.
   JSON-RPC over stdio in `src/mcp-server.ts` instead.
 - **`recheck`/`punch` never edits an ADR and never re-decides.** It runs two passes (pass 1 iterates
   the `## Claims`, pass 2 asks four questions about `## Problem`), raises with evidence (a source
-  and a quote) or stays quiet, and appends exactly one line to `docs/adr/recheck.tsv` per run.
+  and a quote) or stays quiet, and appends exactly one line to `docs/adr/recheck.tsv` per run that
+  reaches a verdict — a refusal (`judge-failed`, `adr-invalid`, `search-not-configured`, ...)
+  appends nothing.
   Tests must never call the real EXA search backend or the real judge model — set
   `PAWPIE_SEARCH_FIXTURE` (the parent process reads only this var; it derives
   `PAWPIE_SEARCH_ADAPTER` itself when forwarding env to the spawned `__mcp-serve` child) and a fake
