@@ -284,7 +284,22 @@ export function runRecheck(
     };
   }
 
-  const adrContent = fs.readFileSync(path.join(adrDir, adr.file), "utf8");
+  let adrContent: string;
+  try {
+    adrContent = fs.readFileSync(path.join(adrDir, adr.file), "utf8");
+  } catch (err) {
+    // A genuine race (the ADR file deleted between the scan above and this
+    // read) — every other expected failure is reported as a refusal, so this
+    // one is too, instead of throwing out from under a direct caller.
+    return {
+      schema: "pawpie-recheck@1",
+      ok: false,
+      reason: "adr-file-unreadable",
+      id: normalizeId(id),
+      message: `could not read ADR ${normalizeId(id)}: ${(err as Error).message}`,
+      exitCode: 2,
+    };
+  }
 
   // `list`'s own gate (adr.error) does not flag this: a freshly created ADR
   // with its ## Problem still unfilled is a valid, listable ADR — only

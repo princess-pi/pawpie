@@ -404,12 +404,17 @@ function validateVerdict(
   return { outcome: d.outcome, raises, extractedClaims, checkedClaims, checkedQuestions, unchecked };
 }
 
+// A stalled judge CLI or MCP child must not block recheck/punch forever —
+// this bounds spawnSync's wait, overridable per call (tests) via opts.timeoutMs.
+const DEFAULT_JUDGE_TIMEOUT_MS = 10 * 60 * 1000;
+
 export interface JudgeOptions {
   env?: NodeJS.ProcessEnv;
   selfCommand?: string[]; // [execPath, scriptPath] used to spawn the MCP search server
   searchAdapterEnv?: Record<string, string>; // env for the spawned MCP server
   claims?: Claim[] | null;
   pass2?: Pass2Context;
+  timeoutMs?: number;
 }
 
 export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions = {}): JudgeResult {
@@ -461,6 +466,7 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
     // while still producing a well-formed (and wrong) "clear" verdict.
     const ALLOWED_TOOLS = "mcp__pawpie__search,mcp__pawpie__fetch_url";
 
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS;
     const child = spawnSync(
       bin,
       [...cmdArgs, "--mcp-config", mcpConfigFile, "--strict-mcp-config", "--allowedTools", ALLOWED_TOOLS],
@@ -469,9 +475,16 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
         input: prompt,
         encoding: "utf8",
         maxBuffer: 64 * 1024 * 1024,
+        timeout: timeoutMs,
       },
     );
+    if ((child.error as NodeJS.ErrnoException)?.code === "ETIMEDOUT") {
+      throw new JudgeError(`judge command exceeded its ${timeoutMs}ms timeout and was killed`);
+    }
     if (child.error) throw new JudgeError(`judge command failed to start: ${child.error.message}`);
+    if (child.signal) {
+      throw new JudgeError(`judge command was killed by ${child.signal} after exceeding its ${timeoutMs}ms timeout`);
+    }
     if (child.status !== 0) {
       throw new JudgeError(`judge command exited ${child.status}: ${(child.stderr ?? "").slice(0, 500)}`);
     }

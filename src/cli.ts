@@ -7,7 +7,6 @@ import { buildListResult, refuseList, renderListText } from "./list.ts";
 import { createAdr } from "./new.ts";
 import {
   createSearchAdapterFromEnv,
-  normalizeId,
   refuseMissingId,
   refuseRecheckUsage,
   runRecheck,
@@ -242,20 +241,7 @@ function runRecheckCommand(
     return refusal.exitCode;
   }
 
-  let result: RecheckResult | RecheckRefusal;
-  try {
-    result = runRecheck(repoPath, id);
-  } catch (err) {
-    // runRecheck reports every expected failure (missing/unreadable ADR
-    // directory included) as a RecheckRefusal; this only catches a genuine
-    // race (e.g. the ADR file deleted between the scan and the read).
-    const normalizedId = normalizeId(id);
-    const message = `could not read ADR ${normalizedId}: ${(err as Error).message}`;
-    if (json) {
-      stdout(JSON.stringify({ schema: "pawpie-recheck@1", ok: false, reason: "adr-file-unreadable", id: normalizedId, message, exitCode: 2 }));
-    } else stderr(`pawpie: ${message}`);
-    return 2;
-  }
+  const result: RecheckResult | RecheckRefusal = runRecheck(repoPath, id);
 
   if (json) stdout(JSON.stringify(result));
   else if (!result.ok) {

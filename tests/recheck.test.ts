@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -304,6 +304,31 @@ describe("pawpie recheck/punch — refusals", () => {
     if (result.ok) return;
     expect(result.reason).toBe("pass2-context-unreadable");
     expect(result.exitCode).toBe(2);
+  });
+
+  test("a direct caller gets adr-file-unreadable, not a thrown error, when the ADR is deleted right after the scan", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const adrPath = path.join(adrDirOf(repo), "0001-use-bun.md");
+    const original = fs.readFileSync;
+    let calls = 0;
+    const spy = spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+      calls += 1;
+      // The 1st call is scanAdrDir's own read (must succeed so the ADR is
+      // judged valid); the 2nd is runRecheck's second, separate read of the
+      // same file — simulate the file vanishing in between.
+      if (calls === 2 && args[0] === adrPath) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      return original(...args);
+    }) as typeof fs.readFileSync);
+    try {
+      const result = runRecheck(repo, "0001", { env: fakeJudgeEnv(CLEAR_VERDICT) });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe("adr-file-unreadable");
+      expect(result.exitCode).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   const isRoot = process.getuid !== undefined && process.getuid() === 0;
