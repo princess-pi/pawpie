@@ -406,7 +406,7 @@ function validateVerdict(
 
 // A stalled judge CLI or MCP child must not block recheck/punch forever —
 // this bounds spawnSync's wait, overridable per call (tests) via opts.timeoutMs.
-const DEFAULT_JUDGE_TIMEOUT_MS = 10 * 60 * 1000;
+export const DEFAULT_JUDGE_TIMEOUT_MS = 22 * 60 * 1000;
 
 export interface JudgeOptions {
   env?: NodeJS.ProcessEnv;

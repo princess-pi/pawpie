@@ -111,7 +111,7 @@ user can swap it) as long as the replacement understands `--mcp-config <file> --
 --allowedTools <tool names>` the way Claude Code's `claude -p` does (all three are always appended)
 — pawpie hands the judge its search tools over MCP, spawned as `pawpie`'s own hidden
 `__mcp-serve` subcommand, and holds no model key of its own. A replacement CLI that rejects an
-unknown flag fails every run as `judge-failed` (exit 1). `--json` reports what the judge
+unknown flag fails every run as `judge-failed` (exit 1). A judge process still running after **22 minutes** is killed and reported as `judge-failed`: long enough for a deep reasoning search, short enough to end a stuck process. It is not a cost cap. `--json` reports what the judge
 actually used (`usage.searches`, `usage.fetches`, `usage.judgeCalls`) — it never limits it.
 
 ## v0 known limits
