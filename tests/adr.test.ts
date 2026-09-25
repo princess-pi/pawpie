@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
-import { UNFILLED_PROBLEM_PLACEHOLDER, extractDate, nextFreeNumber, scanAdrDir } from "../src/adr.ts";
+import {
+  UNFILLED_CLAIMS_PLACEHOLDER,
+  UNFILLED_PROBLEM_PLACEHOLDER,
+  extractClaimsSection,
+  extractDate,
+  nextFreeNumber,
+  parseClaims,
+  scanAdrDir,
+} from "../src/adr.ts";
 import { ReadFailure, errorCode } from "../src/errors.ts";
 import { adrDirOf, makeTempRepo, writeAdrFile, writeSidecar } from "./support.ts";
 
@@ -81,5 +89,53 @@ describe("nextFreeNumber", () => {
       expect((err as ReadFailure).failedPath).toBe(adrDir);
       expect(errorCode(err)).toBe("ENOENT");
     }
+  });
+});
+
+describe("## Claims parsing", () => {
+  test("parses a taken and a not-taken claim, each with its source", () => {
+    const claims = parseClaims(
+      "- [taken] bun hardlinks packages from a global cache — https://bun.sh/docs/install/cache\n" +
+        "- [not-taken] npm re-copies every package on install — https://docs.npmjs.com/cli/v10/commands/npm-install",
+    );
+    expect(claims).toEqual([
+      { disposition: "taken", text: "bun hardlinks packages from a global cache", source: "https://bun.sh/docs/install/cache" },
+      { disposition: "not-taken", text: "npm re-copies every package on install", source: "https://docs.npmjs.com/cli/v10/commands/npm-install" },
+    ]);
+  });
+
+  test("a line that doesn't match the shape is skipped, not refused", () => {
+    const claims = parseClaims("not a claim line at all\n- [taken] real claim — https://a\n");
+    expect(claims).toHaveLength(1);
+    expect(claims[0].text).toBe("real claim");
+  });
+
+  test("the unfilled placeholder line does not parse as a claim", () => {
+    expect(parseClaims(UNFILLED_CLAIMS_PLACEHOLDER)).toHaveLength(0);
+  });
+
+  test("scanAdrDir marks claimsMissing when there is no ## Claims section", () => {
+    const repo = makeTempRepo();
+    writeAdrFile(repo, "0001-a.md", "# 0001. A\n\n- **Date:** 2026-01-01\n\n## Problem\n\nx\n");
+    const { adrs } = scanAdrDir(adrDirOf(repo));
+    expect(adrs[0].claimsMissing).toBe(true);
+    expect(adrs[0].claims).toHaveLength(0);
+  });
+
+  test("scanAdrDir reads a populated ## Claims section and marks claimsMissing false", () => {
+    const repo = makeTempRepo();
+    writeAdrFile(
+      repo,
+      "0001-a.md",
+      "# 0001. A\n\n- **Date:** 2026-01-01\n\n## Problem\n\nx\n\n## Claims\n\n- [taken] a claim — https://a\n",
+    );
+    const { adrs } = scanAdrDir(adrDirOf(repo));
+    expect(adrs[0].claimsMissing).toBe(false);
+    expect(adrs[0].claims).toEqual([{ disposition: "taken", text: "a claim", source: "https://a" }]);
+  });
+
+  test("extractClaimsSection stops at the next ## heading", () => {
+    const text = extractClaimsSection("## Claims\n\n- [taken] x — y\n\n## Next\n\nunrelated\n");
+    expect(text).toBe("- [taken] x — y");
   });
 });

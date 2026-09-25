@@ -18,11 +18,15 @@ describe("pawpie new", () => {
 
     const content = fs.readFileSync(path.join(repo, "docs", "adr", result.file), "utf8");
     expect(content).toContain("## Problem");
+    expect(content).toContain("## Claims");
     expect(content).toMatch(/-\s*\*\*Date:\*\*\s*\d{4}-\d{2}-\d{2}/);
 
     const listed = buildListResult(repo);
     expect(listed.exitCode).toBe(0);
     expect(listed.adrs[0].problemWarning).toBe(false);
+    // Claims aren't filled in until the decision is actually researched, so
+    // a freshly written ADR still warns until they are added.
+    expect(listed.adrs[0].claimsWarning).toBe(true);
   });
 
   test("refuses rather than writing 0003 when a duplicate number is present", () => {

@@ -22,6 +22,58 @@ export function writeSidecar(repoPath: string, lines: string[]): void {
   fs.writeFileSync(path.join(dir, "recheck.tsv"), lines.join("\n") + "\n", "utf8");
 }
 
+// The URLs/quotes every existing fakeJudgeEnv-based test's canned verdict
+// cites as evidence, seeded via PAWPIE_TEST_PRESET_EVIDENCE since a fake
+// judge never starts a real MCP server to produce one. A test citing a URL
+// not covered here needs its own `evidence` argument.
+const DEFAULT_PRESET_EVIDENCE = [
+  { url: "https://example.com/evidence", text: "this changed" },
+  { url: "https://a", text: "q1" },
+  { url: "https://b", text: "q2" },
+];
+
+// Writes a throwaway node script that ignores its input entirely and prints
+// a canned verdict to stdout, then returns the env to run recheck/punch
+// against it — the fake judge required by the workflow's "never call the
+// real judge in a test" rule. `exitCode` lets a test simulate a judge that
+// fails outright. `evidence` overrides the default preset evidence log a
+// URL-sourced raise in `verdict` is checked against.
+export function fakeJudgeEnv(
+  verdict: unknown,
+  exitCode = 0,
+  evidence: { url: string; text: string }[] = DEFAULT_PRESET_EVIDENCE,
+): NodeJS.ProcessEnv {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-fake-judge-"));
+  const scriptPath = path.join(dir, "judge.mjs");
+  const body =
+    exitCode === 0
+      ? `process.stdout.write(process.env.PAWPIE_TEST_VERDICT ?? "");\n`
+      : `process.stderr.write("fake judge failure\\n"); process.exit(${exitCode});\n`;
+  fs.writeFileSync(scriptPath, body, "utf8");
+
+  // This fake judge ignores its tools entirely, but runRecheck still
+  // preflights that a search backend is configured before invoking any
+  // judge — a harmless empty fixture satisfies that check without pulling
+  // EXA_API_KEY (or a real network call) into a unit test.
+  const fixturePath = path.join(dir, "unused-fixture.json");
+  fs.writeFileSync(fixturePath, JSON.stringify({ results: [] }), "utf8");
+
+  const env = { ...process.env };
+  // A developer or CI shell exporting either of these would silently change
+  // which pass-2 questions tests expect as unchecked — tests must control
+  // this input explicitly (by setting it themselves), not inherit it.
+  delete env.PAWPIE_AGENT_CAPABILITIES;
+  delete env.PAWPIE_PASS2_ISSUES_FIXTURE;
+
+  return {
+    ...env,
+    PAWPIE_JUDGE_CMD: `node ${scriptPath}`,
+    PAWPIE_TEST_VERDICT: typeof verdict === "string" ? verdict : JSON.stringify(verdict),
+    PAWPIE_SEARCH_FIXTURE: fixturePath,
+    PAWPIE_TEST_PRESET_EVIDENCE: JSON.stringify(evidence),
+  };
+}
+
 export function captured() {
   const out: string[] = [];
   const err: string[] = [];

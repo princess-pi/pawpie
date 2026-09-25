@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { scanAdrDir, type AdrRecord } from "./adr.ts";
 import { ReadFailure } from "./errors.ts";
 import { readSidecar, lastCheckByAdr, type CheckEntry } from "./sidecar.ts";
+import { sanitizeForTerminal } from "./terminal.ts";
 
 export interface ListedAdr {
   id: string;
@@ -10,6 +11,7 @@ export interface ListedAdr {
   date: string | null;
   lastCheck: { date: string; outcome: string; note: string } | null;
   problemWarning: boolean;
+  claimsWarning: boolean;
   error: { kind: string; message: string } | null;
 }
 
@@ -65,6 +67,7 @@ export function buildListResult(repoPath: string): ListResult {
       date: adr.date,
       lastCheck: check ? { date: check.date, outcome: check.outcome, note: check.note } : null,
       problemWarning: adr.problemWarning,
+      claimsWarning: adr.claimsMissing,
       error: adr.error,
     };
   });
@@ -101,16 +104,6 @@ export function refuseList(
   return { schema: "pawpie-list@1", ok: false, reason, path: repoPath, message, exitCode: 2 };
 }
 
-// ADR titles come from file content, and a sidecar's date/note columns are
-// unvalidated free text — either can carry a terminal escape sequence (e.g.
-// OSC 52, which can write the invoking user's clipboard). Strip C0 controls
-// and DEL before any of it reaches a terminal via the text renderer.
-// eslint-disable-next-line no-control-regex
-const CONTROL_CHARS = /[\x00-\x1f\x7f]/g;
-function sanitizeForTerminal(s: string): string {
-  return s.replace(CONTROL_CHARS, "");
-}
-
 export function renderListText(result: ListResult): string {
   if (result.adrs.length === 0) {
     return "No ADRs found.";
@@ -124,6 +117,9 @@ export function renderListText(result: ListResult): string {
     lines.push(`${adr.id}  ${title}  [${adr.date ?? "no date"}]  ${check}`);
     if (adr.problemWarning) {
       lines.push(`  warning: ## Problem may name the chosen option (${result.problemWarningCaveat})`);
+    }
+    if (adr.claimsWarning) {
+      lines.push("  warning: no ## Claims section (or none of its lines parse) — punch will extract its own");
     }
     if (adr.error) {
       lines.push(`  error: ${sanitizeForTerminal(adr.error.message)}`);
