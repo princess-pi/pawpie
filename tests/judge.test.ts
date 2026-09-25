@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { JudgeError, runJudge } from "../src/judge.ts";
+import { DEFAULT_JUDGE_TIMEOUT_MS, JudgeError, runJudge } from "../src/judge.ts";
 
 describe("runJudge — a stalled judge process must not hang forever", () => {
   test("a judge command that never exits is killed and reported as a timeout, not an indefinite hang", () => {
@@ -19,5 +19,11 @@ describe("runJudge — a stalled judge process must not hang forever", () => {
     }
     expect(threw).toBeInstanceOf(JudgeError);
     expect((threw as JudgeError).message).toMatch(/timeout/i);
+  });
+});
+
+describe("runJudge — default timeout", () => {
+  test("a judge is given 22 minutes before it is killed, long enough for a deep reasoning search", () => {
+    expect(DEFAULT_JUDGE_TIMEOUT_MS).toBe(22 * 60 * 1000);
   });
 });
