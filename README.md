@@ -175,8 +175,10 @@ actually used (`usage.searches`, `usage.fetches`, `usage.judgeCalls`) — it nev
   by a human and carries no stability guarantee across versions.
 - **Pass 2's repo context is v0-minimal.** The README comes straight from `<path>/README.md`; open
   issues have no live lookup yet — set `PAWPIE_PASS2_ISSUES_FIXTURE` to a file's path to supply
-  them. Question 4 (`changed-spec`) is reported `unchecked` only when **both** the README and the
-  issues fixture are unavailable; question 3 (`new-make-abilities`) depends only on
+  them, one `issue #<n>` header line per issue followed by that issue's own text (up to the next
+  such header or EOF) — a raise citing `issue #<n>` as evidence is checked against only that
+  issue's own section, never the whole file. Question 4 (`changed-spec`) is reported `unchecked`
+  only when **both** the README and the issues fixture are unavailable; question 3 (`new-make-abilities`) depends only on
   `PAWPIE_AGENT_CAPABILITIES` and is `unchecked` whenever that isn't set. Both are enforced in code
   (`pass2QuestionAvailable` in `src/judge.ts`), not left to the judge's honesty.
 - **`recheck`/`punch` reads the ADR file twice** — once via `scanAdrDir` (to gate on `adr.error`),

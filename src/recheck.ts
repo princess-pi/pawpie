@@ -200,6 +200,20 @@ function searchConfigError(env: NodeJS.ProcessEnv): string | null {
       if (badHit !== undefined) {
         return `PAWPIE_SEARCH_FIXTURE (${env.PAWPIE_SEARCH_FIXTURE}) has a result missing a string "url" or "text": ${JSON.stringify(badHit)}`;
       }
+      // fetchText overrides a hit's text for a given URL — a non-string value
+      // here reaches mcp-server.ts as non-string evidence, which runJudge
+      // then discards wholesale, turning this malformed fixture into an
+      // opaque judge-failed instead of a config error reported upfront.
+      const fetchText = (fixture as { fetchText?: unknown }).fetchText;
+      if (fetchText !== undefined) {
+        if (typeof fetchText !== "object" || fetchText === null) {
+          return `PAWPIE_SEARCH_FIXTURE (${env.PAWPIE_SEARCH_FIXTURE}) has a "fetchText" that is not an object`;
+        }
+        const badEntry = Object.entries(fetchText as Record<string, unknown>).find(([, v]) => typeof v !== "string");
+        if (badEntry !== undefined) {
+          return `PAWPIE_SEARCH_FIXTURE (${env.PAWPIE_SEARCH_FIXTURE}) has a non-string "fetchText" value for ${JSON.stringify(badEntry[0])}`;
+        }
+      }
     } catch (err) {
       return `PAWPIE_SEARCH_FIXTURE (${env.PAWPIE_SEARCH_FIXTURE}) could not be read as JSON: ${(err as Error).message}`;
     }

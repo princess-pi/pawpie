@@ -281,6 +281,19 @@ describe("pawpie recheck/punch — refusals", () => {
     expect(result.reason).toBe("search-not-configured");
   });
 
+  test("refuses with search-not-configured when a fixture's fetchText has a non-string value", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const badFixture = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-bad-fixture-")), "bad.json");
+    fs.writeFileSync(badFixture, JSON.stringify({ results: [], fetchText: { "https://a": 123 } }));
+    const env: NodeJS.ProcessEnv = { ...process.env, PAWPIE_SEARCH_FIXTURE: badFixture, PAWPIE_JUDGE_CMD: "node -e process.exit(1)" };
+    delete env.EXA_API_KEY;
+    const result = runRecheck(repo, "0001", { env });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("search-not-configured");
+  });
+
   test("refuses with pass2-context-unreadable when an explicitly configured context file can't be read", () => {
     const repo = makeTempRepo();
     seedAdr(repo);
@@ -680,5 +693,53 @@ describe("pawpie recheck/punch — evidence is checked, not trusted", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("judge-failed");
+  });
+
+  test("a raise citing 'issue #12' is checked against issue #12's own text, not another issue's", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const issuesPath = path.join(repo, "issues.txt");
+    fs.writeFileSync(issuesPath, "issue #12\nmentions apples\n\nissue #13\nmentions oranges\n", "utf8");
+    const verdict = {
+      ...pass2Raise("changed-spec", ["changed-spec"]),
+      raises: [
+        {
+          pass: 2,
+          question: "changed-spec",
+          note: "spec moved",
+          evidence: { source: "issue #12", quote: "mentions oranges" },
+        },
+      ],
+    };
+    const env = fakeJudgeEnv(verdict);
+    env.PAWPIE_PASS2_ISSUES_FIXTURE = issuesPath;
+    const result = runRecheck(repo, "0001", { env });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("judge-failed");
+  });
+
+  test("a raise citing 'issue #12' with a quote actually inside issue #12's own text is accepted", () => {
+    const repo = makeTempRepo();
+    seedAdr(repo);
+    const issuesPath = path.join(repo, "issues.txt");
+    fs.writeFileSync(issuesPath, "issue #12\nmentions apples\n\nissue #13\nmentions oranges\n", "utf8");
+    const verdict = {
+      ...pass2Raise("changed-spec", ["changed-spec"]),
+      raises: [
+        {
+          pass: 2,
+          question: "changed-spec",
+          note: "spec moved",
+          evidence: { source: "issue #12", quote: "mentions apples" },
+        },
+      ],
+    };
+    const env = fakeJudgeEnv(verdict);
+    env.PAWPIE_PASS2_ISSUES_FIXTURE = issuesPath;
+    const result = runRecheck(repo, "0001", { env });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.outcome).toBe("raised");
   });
 });

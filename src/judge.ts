@@ -223,20 +223,36 @@ function claimKey(c: ClaimRef): string {
   return `${c.disposition}\u0000${c.text}`;
 }
 
+// PAWPIE_PASS2_ISSUES_FIXTURE has no live lookup yet (README.md), so its
+// format is pawpie's own convention: one `issue #<n>` header line per issue,
+// followed by that issue's own text, up to the next such header or EOF.
+function issueSection(openIssues: string, source: string): string | null {
+  const headerRe = /^issue #\d+$/;
+  let current: string | null = null;
+  let buf: string[] = [];
+  for (const line of openIssues.split("\n")) {
+    if (headerRe.test(line.trim())) {
+      if (current === source) return buf.join("\n").trim();
+      current = line.trim();
+      buf = [];
+    } else if (current !== null) {
+      buf.push(line);
+    }
+  }
+  return current === source ? buf.join("\n").trim() : null;
+}
+
 // A source naming a repo artifact pawpie itself supplied — never web-sourced,
 // so it is checked against that artifact's own text instead of evidenceLog.
 // Anything not a URL and not one of these three is not a source pawpie ever
 // told the judge to use, and is rejected outright.
 function pass2ArtifactText(source: string, pass2: Pass2Context): string | null {
-  const text =
-    source === "README.md"
-      ? pass2.readme
-      : /^issue #\d+$/.test(source)
-        ? pass2.openIssues
-        : source === "agent skills list"
-          ? pass2.agentCapabilities
-          : null;
-  return text === null ? null : truncatedFor(text);
+  if (source === "README.md") return pass2.readme === null ? null : truncatedFor(pass2.readme);
+  if (source === "agent skills list") return pass2.agentCapabilities === null ? null : truncatedFor(pass2.agentCapabilities);
+  if (/^issue #\d+$/.test(source)) {
+    return pass2.openIssues === null ? null : issueSection(truncatedFor(pass2.openIssues), source);
+  }
+  return null;
 }
 
 // `recordedClaims` is the parsed `## Claims` list, or null when the judge
@@ -310,7 +326,10 @@ function validateVerdict(
         throw new JudgeError(`raise[${i}].evidence.quote does not appear in ${evidence.source}`);
       }
     }
-    const note = typeof raise.note === "string" ? raise.note : "";
+    if (typeof raise.note !== "string" || raise.note.trim().length === 0) {
+      throw new JudgeError(`raise[${i}] is missing a non-empty "note"`);
+    }
+    const note = raise.note;
     if (raise.pass === 1) {
       const claim = validateClaimRef(raise.claim, `raise[${i}].claim`);
       if (!iteratedKeys.has(claimKey(claim))) {
