@@ -310,7 +310,7 @@ title or sidecar date containing one comes through as `\u001b`, not a raw byte.
 | exit | meaning |
 |---|---|
 | 0 | ran; nothing raised (also help, and a `recheck`/`punch` outcome of `clear`) |
-| 1 | `recheck`/`punch`: the judge failed (nonzero exit or an unparseable/invalid verdict), or `recheck.tsv` could not be appended to |
+| 1 | `recheck`/`punch`: the judge failed (nonzero exit, killed after its 22-minute timeout, or an unparseable/invalid verdict), or `recheck.tsv` could not be appended to |
 | 2 | usage error: an unknown command, an unknown flag, an unexpected extra argument, a missing or newline-containing title for `new`, no ADR directory or an unreadable ADR directory/sidecar for `list`, an unwritable ADR directory for `new` (or an unreadable ADR directory/sidecar, reported by naming that path instead), or `recheck`/`punch` with no id, an unreadable ADR directory or file, an id that doesn't exist, an ADR that already fails its own `list` checks or still holds `new`'s unfilled `## Problem` placeholder (an ADR `list` itself accepts), no search backend configured (neither `EXA_API_KEY` nor `PAWPIE_SEARCH_FIXTURE`), an unreadable or malformed `PAWPIE_SEARCH_FIXTURE`, or a pass-2 context file — `PAWPIE_PASS2_ISSUES_FIXTURE` / `PAWPIE_AGENT_CAPABILITIES`, or a README.md that exists but can't be read — that can't be read |
 | 3 | an ADR is present and checks nothing: no `## Problem`, no date in any known shape, unreadable, or a duplicate number — also returned by `new` when the directory already has a duplicate number |
 | 10 | `recheck`/`punch` raised the decision for a human to triage |
