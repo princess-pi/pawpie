@@ -157,6 +157,17 @@ describe("pawpie list", () => {
     const text = renderListText(buildListResult(repo));
 
     expect(text).toContain("no ## Claims section");
+    expect(text).toContain("punch extracts its own");
+  });
+
+  test("renderListText does not promise claim extraction for an ADR punch would refuse", () => {
+    const repo = makeTempRepo();
+    writeAdrFile(repo, "0001-no-date.md", "# 0001. No date here\n\n## Problem\n\nsomething\n");
+
+    const text = renderListText(buildListResult(repo));
+
+    expect(text).toContain("no ## Claims section");
+    expect(text).not.toContain("punch extracts its own");
   });
 
   test("renderListText strips terminal control characters from a title", () => {

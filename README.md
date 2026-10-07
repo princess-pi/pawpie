@@ -231,15 +231,17 @@ itself from the ADR's prose instead of refusing.
 ```
 
 `list` reads it to show the last check per ADR; `recheck`/`punch` is what writes it, one line per
-run. Reading it tolerates a leading UTF-8 BOM and both `\n` and `\r\n` line endings. Two lines for
-the same ADR on the same date: the later line in the file wins. When a run raises more than one
+run that reaches a verdict (a refusal appends nothing). Reading it tolerates a leading UTF-8 BOM
+and both `\n` and `\r\n` line endings. Two lines for the same ADR on the same date: the later line
+in the file wins. When a run raises more than one
 claim/question, every raise's note is folded onto that one line, tagged with its pass
 (`pass1:taken`, `pass1:not-taken`, or `pass2:<question>`) and joined with `; ` — the full evidence
 (source and quote) for each raise is only in the `--json` record, not the sidecar row. When a
 pass-2 question went unchecked, the row's note ends with `; unchecked: <question>,<question>` so
 the sidecar itself never reads as "fully clear" for a run that couldn't check everything. The note
 also ends with `; usage unknown` when the search server never started or its counts couldn't be
-read, or `; every search/fetch call failed` when every attempted call errored — either way a bare
+read, `; no search/fetch calls made` when the judge never called either tool, or `; every
+search/fetch call failed` when every attempted call errored — any of these, a bare
 `clear` row would otherwise be indistinguishable from a fully researched one. A run served by
 `PAWPIE_SEARCH_FIXTURE` (a test, or a leaked test env var in a real run) ends the note with
 `; backend:fixture` — the only durable, committed signal that it happened.

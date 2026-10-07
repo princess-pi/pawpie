@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { runRecheck } from "../src/recheck.ts";
-import { adrDirOf, makeTempRepo, writeAdrFile } from "./support.ts";
+import { adrDirOf, makeTempRepo, testEnv, writeAdrFile } from "./support.ts";
 
 // A real MCP client standing in for the judge CLI in a test: it spawns the
 // search server named in its own --mcp-config, calls the
@@ -137,7 +137,7 @@ describe("integration: fixture adapter -> real MCP server -> a judge that actual
     );
 
     const result = runRecheck(repo, "0001", {
-      env: { ...process.env, PAWPIE_JUDGE_CMD: `node ${judgeScript}`, PAWPIE_SEARCH_FIXTURE: fixture },
+      env: { ...testEnv(), PAWPIE_JUDGE_CMD: `node ${judgeScript}`, PAWPIE_SEARCH_FIXTURE: fixture },
       // Under `bun test` there's no built bundle to be argv[1] — point the
       // MCP config's spawned server at this repo's own cli.ts source instead
       // of judge.ts's default (which assumes this process itself was
@@ -171,7 +171,7 @@ describe("integration: fixture adapter -> real MCP server -> a judge that actual
     );
 
     const result = runRecheck(repo, "0001", {
-      env: { ...process.env, PAWPIE_JUDGE_CMD: `node ${judgeScript}`, PAWPIE_SEARCH_FIXTURE: fixture },
+      env: { ...testEnv(), PAWPIE_JUDGE_CMD: `node ${judgeScript}`, PAWPIE_SEARCH_FIXTURE: fixture },
       selfCommand: [process.execPath, path.resolve(import.meta.dirname, "..", "src", "cli.ts")],
     });
 
@@ -193,7 +193,7 @@ describe("integration: fixture adapter -> real MCP server -> a judge that actual
     );
 
     const result = runRecheck(repo, "0001", {
-      env: { ...process.env, PAWPIE_JUDGE_CMD: `node ${judgeScript}`, PAWPIE_SEARCH_FIXTURE: fixture },
+      env: { ...testEnv(), PAWPIE_JUDGE_CMD: `node ${judgeScript}`, PAWPIE_SEARCH_FIXTURE: fixture },
       selfCommand: [process.execPath, path.resolve(import.meta.dirname, "..", "src", "cli.ts")],
     });
 
@@ -219,7 +219,7 @@ describe("integration: fixture adapter -> real MCP server -> a judge that actual
     );
 
     const proc = spawnSync("node", [bundle, "punch", "0001", repo, "--json"], {
-      env: { ...process.env, PAWPIE_JUDGE_CMD: `node ${judgeScript}`, PAWPIE_SEARCH_FIXTURE: fixture },
+      env: { ...testEnv(), PAWPIE_JUDGE_CMD: `node ${judgeScript}`, PAWPIE_SEARCH_FIXTURE: fixture },
       encoding: "utf8",
     });
 

@@ -33,9 +33,10 @@ there about as often as you commit.
   reaches a verdict — a refusal (`judge-failed`, `adr-invalid`, `search-not-configured`, ...)
   appends nothing.
   Tests must never call the real EXA search backend or the real judge model — set
-  `PAWPIE_SEARCH_FIXTURE` (the parent process reads only this var; it derives
+  `PAWPIE_SEARCH_FIXTURE` (of the search vars, the parent process reads only this one; it derives
   `PAWPIE_SEARCH_ADAPTER` itself when forwarding env to the spawned `__mcp-serve` child) and a fake
-  `PAWPIE_JUDGE_CMD` (see `tests/support.ts`'s `fakeJudgeEnv`).
+  `PAWPIE_JUDGE_CMD` (see `tests/support.ts`'s `fakeJudgeEnv`, which also sets the test-only
+  `PAWPIE_TEST_PRESET_EVIDENCE`, honoured only alongside `PAWPIE_SEARCH_FIXTURE`).
 
 ## Stack
 

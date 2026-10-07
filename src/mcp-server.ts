@@ -96,10 +96,10 @@ export async function handleMcpRequest(
           evidence?.push(...hits.map((h) => ({ url: h.url, text: `${h.title}\n${h.text}` })));
           return respond(toolResult(JSON.stringify(hits)));
         } catch (err) {
-          // A transient backend failure (a rate limit, a timeout) must never
-          // crash this server — an unhandled rejection here would take down
-          // the judge's only search tool for the rest of the run, with no
-          // JSON-RPC error reaching the caller for this call.
+          // A transient backend failure (a rate limit, a timeout) must come
+          // back as a tool error, not a rejection — runMcpStdioServer would
+          // catch a rejection and stay up, but this call would go unanswered
+          // and the judge would never learn why.
           counts.searchErrors += 1;
           return respond(toolError(`search failed: ${(err as Error).message}`));
         }
@@ -155,9 +155,10 @@ export function runMcpStdioServer(adapter: SearchAdapter, countsFile?: string, e
           }
         }
         if (evidenceFile) {
-          // Written every request, even as `[]` — a client that starts this
-          // server and calls no tool must produce a real (empty) log, not a
-          // missing file indistinguishable from "never started".
+          // Written every request, even as `[]`. judge.ts reads a missing or
+          // malformed file as `[]` too, so this is not what tells "never
+          // started" apart from "returned nothing" — either way a URL-sourced
+          // raise has no evidence to match and is rejected.
           try {
             fs.writeFileSync(evidenceFile, JSON.stringify(evidence));
           } catch {
