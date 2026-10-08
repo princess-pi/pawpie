@@ -416,21 +416,39 @@ export const DEFAULT_JUDGE_KILL_GRACE_MS = 10 * 1000;
 // writes how the judge actually ended to the status file, so a timeout is told
 // apart from a signal that came from somewhere else. Judge stdin/stdout/stderr
 // pass straight through. Plain CommonJS so both `node -e` and `bun -e` run it.
+//
+// The judge runs in its own process group, so every signal reaches its MCP
+// server too, and its pid goes to the pid file: if the supervisor itself is
+// killed (spawnSync's maxBuffer or backstop), runJudge kills that group, so no
+// judge outlives the run.
 const JUDGE_SUPERVISOR = `
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
-const [statusFile, timeoutMs, graceMs, bin, ...args] = process.argv.slice(1);
-const report = (status) => { fs.writeFileSync(statusFile, JSON.stringify(status)); process.exit(0); };
+const [statusFile, pidFile, timeoutMs, graceMs, bin, ...args] = process.argv.slice(1);
 let timedOut = false;
-const child = spawn(bin, args, { stdio: "inherit" });
+const child = spawn(bin, args, { stdio: "inherit", detached: true });
+if (child.pid) fs.writeFileSync(pidFile, String(child.pid));
+const killGroup = (sig) => { try { process.kill(-child.pid, sig); } catch {} };
+const report = (status) => { killGroup("SIGKILL"); fs.writeFileSync(statusFile, JSON.stringify(status)); process.exit(0); };
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => { killGroup("SIGKILL"); process.exit(1); });
 const timer = setTimeout(() => {
   timedOut = true;
-  child.kill("SIGTERM");
-  setTimeout(() => child.kill("SIGKILL"), Number(graceMs)).unref();
+  killGroup("SIGTERM");
+  setTimeout(() => killGroup("SIGKILL"), Number(graceMs)).unref();
 }, Number(timeoutMs));
 child.on("error", (err) => { clearTimeout(timer); report({ error: err.message }); });
 child.on("exit", (code, signal) => { clearTimeout(timer); report({ code, signal, timedOut }); });
 `;
+
+// Kills the judge's process group if the supervisor died before reporting.
+function killJudgeGroup(pidFile: string): void {
+  try {
+    const pid = Number(fs.readFileSync(pidFile, "utf8"));
+    if (Number.isInteger(pid) && pid > 0) process.kill(-pid, "SIGKILL");
+  } catch {
+    // No pid file (the judge never started) or the group is already gone.
+  }
+}
 
 interface SupervisorStatus {
   error?: string;
@@ -447,6 +465,7 @@ export interface JudgeOptions {
   pass2?: Pass2Context;
   timeoutMs?: number;
   killGraceMs?: number;
+  maxBuffer?: number;
 }
 
 export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions = {}): JudgeResult {
@@ -501,12 +520,14 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
     const timeoutMs = opts.timeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS;
     const killGraceMs = opts.killGraceMs ?? DEFAULT_JUDGE_KILL_GRACE_MS;
     const statusFile = path.join(workDir, "judge-status.json");
+    const pidFile = path.join(workDir, "judge.pid");
     const child = spawnSync(
       process.execPath,
       [
         "-e",
         JUDGE_SUPERVISOR,
         statusFile,
+        pidFile,
         String(timeoutMs),
         String(killGraceMs),
         bin,
@@ -521,17 +542,21 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
         env,
         input: prompt,
         encoding: "utf8",
-        maxBuffer: 64 * 1024 * 1024,
+        maxBuffer: opts.maxBuffer ?? 64 * 1024 * 1024,
         // Backstop only, for a wedged supervisor: SIGKILL cannot be ignored.
         timeout: timeoutMs + killGraceMs + 30 * 1000,
         killSignal: "SIGKILL",
       },
     );
-    if (child.error) throw new JudgeError(`judge supervisor failed: ${child.error.message}`);
+    if (child.error) {
+      killJudgeGroup(pidFile);
+      throw new JudgeError(`judge supervisor failed: ${child.error.message}`);
+    }
     let status: SupervisorStatus;
     try {
       status = JSON.parse(fs.readFileSync(statusFile, "utf8")) as SupervisorStatus;
     } catch {
+      killJudgeGroup(pidFile);
       throw new JudgeError(
         `judge supervisor ended without reporting a status (exit ${child.status ?? child.signal}): ${(child.stderr ?? "").slice(0, 500)}`,
       );

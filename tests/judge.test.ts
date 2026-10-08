@@ -4,6 +4,26 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { DEFAULT_JUDGE_TIMEOUT_MS, JudgeError, runJudge } from "../src/judge.ts";
 
+// True once `pid` has exited (a zombie awaiting reaping counts as exited),
+// polling briefly since a SIGKILLed process can take a moment to go.
+function isGone(pid: number): boolean {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    try {
+      if (/^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, "utf8"))) return true;
+    } catch {
+      return true;
+    }
+    Bun.sleepSync(50);
+  }
+  return false;
+}
+
 describe("runJudge — a stalled judge process must not hang forever", () => {
   test("a judge command that never exits is killed and reported as a timeout, not an indefinite hang", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-stalled-judge-"));
@@ -38,6 +58,29 @@ describe("runJudge — a stalled judge process must not hang forever", () => {
     expect(threw).toBeInstanceOf(JudgeError);
     expect((threw as JudgeError).message).toMatch(/timeout/i);
     expect((threw as JudgeError).message).toMatch(/SIGKILL/);
+  });
+
+  test("a judge that overflows its output buffer is killed, not left running after runJudge fails", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pawpie-flooding-judge-"));
+    const scriptPath = path.join(dir, "flood.cjs");
+    const pidFile = path.join(dir, "judge.pid");
+    fs.writeFileSync(
+      scriptPath,
+      `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
+        'process.stdout.write("x".repeat(4096));\nsetInterval(() => {}, 1000);\n',
+      "utf8",
+    );
+    const env = { ...process.env, PAWPIE_JUDGE_CMD: `node ${scriptPath}` };
+
+    let threw: unknown;
+    try {
+      runJudge("0001", "# 0001. Some ADR\n", { env, timeoutMs: 60_000, maxBuffer: 1024 });
+    } catch (err) {
+      threw = err;
+    }
+    expect(threw).toBeInstanceOf(JudgeError);
+    const pid = Number(fs.readFileSync(pidFile, "utf8"));
+    expect(isGone(pid)).toBe(true);
   });
 
   test("a judge killed by a signal before its timeout is not reported as a timeout", () => {
