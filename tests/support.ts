@@ -32,6 +32,17 @@ const DEFAULT_PRESET_EVIDENCE = [
   { url: "https://b", text: "q2" },
 ];
 
+// process.env minus the inputs tests must control explicitly. A developer or
+// CI shell exporting either of these would silently change which pass-2
+// questions tests expect as unchecked — tests set them themselves, never
+// inherit them.
+export function testEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.PAWPIE_AGENT_CAPABILITIES;
+  delete env.PAWPIE_PASS2_ISSUES_FIXTURE;
+  return env;
+}
+
 // Writes a throwaway node script that ignores its input entirely and prints
 // a canned verdict to stdout, then returns the env to run recheck/punch
 // against it — the fake judge required by the workflow's "never call the
@@ -58,15 +69,8 @@ export function fakeJudgeEnv(
   const fixturePath = path.join(dir, "unused-fixture.json");
   fs.writeFileSync(fixturePath, JSON.stringify({ results: [] }), "utf8");
 
-  const env = { ...process.env };
-  // A developer or CI shell exporting either of these would silently change
-  // which pass-2 questions tests expect as unchecked — tests must control
-  // this input explicitly (by setting it themselves), not inherit it.
-  delete env.PAWPIE_AGENT_CAPABILITIES;
-  delete env.PAWPIE_PASS2_ISSUES_FIXTURE;
-
   return {
-    ...env,
+    ...testEnv(),
     PAWPIE_JUDGE_CMD: `node ${scriptPath}`,
     PAWPIE_TEST_VERDICT: typeof verdict === "string" ? verdict : JSON.stringify(verdict),
     PAWPIE_SEARCH_FIXTURE: fixturePath,

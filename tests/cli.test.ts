@@ -245,6 +245,13 @@ describe("pawpie cli", () => {
       if (!(key in process.env) || process.env[key] !== fakeEnv[key]) savedEnv[key] = process.env[key];
       process.env[key] = fakeEnv[key];
     }
+    // fakeJudgeEnv scrubs inputs tests must not inherit; drop them here too.
+    for (const key of Object.keys(process.env)) {
+      if (!(key in fakeEnv)) {
+        savedEnv[key] = process.env[key];
+        delete process.env[key];
+      }
+    }
     try {
       const c = captured();
       const code = run(["recheck", "0001", repo], c.stdout, c.stderr);

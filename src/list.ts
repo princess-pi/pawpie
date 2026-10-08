@@ -119,7 +119,12 @@ export function renderListText(result: ListResult): string {
       lines.push(`  warning: ## Problem may name the chosen option (${result.problemWarningCaveat})`);
     }
     if (adr.claimsWarning) {
-      lines.push("  warning: no ## Claims section (or none of its lines parse) — punch will extract its own");
+      // punch refuses an ADR with an error outright, so only promise extraction when it can run.
+      lines.push(
+        adr.error
+          ? "  warning: no ## Claims section (or none of its lines parse)"
+          : "  warning: no ## Claims section (or none of its lines parse) — punch extracts its own if ## Problem is filled in",
+      );
     }
     if (adr.error) {
       lines.push(`  error: ${sanitizeForTerminal(adr.error.message)}`);

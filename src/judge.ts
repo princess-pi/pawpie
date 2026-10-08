@@ -405,8 +405,57 @@ function validateVerdict(
 }
 
 // A stalled judge CLI or MCP child must not block recheck/punch forever —
-// this bounds spawnSync's wait, overridable per call (tests) via opts.timeoutMs.
+// this bounds the judge's run, overridable per call (tests) via opts.timeoutMs.
 export const DEFAULT_JUDGE_TIMEOUT_MS = 22 * 60 * 1000;
+// How long a timed-out judge gets to exit after SIGTERM before it is SIGKILLed.
+export const DEFAULT_JUDGE_KILL_GRACE_MS = 10 * 1000;
+
+// spawnSync waits for its child to exit, so on its own it cannot escalate a
+// SIGTERM the judge ignores. This supervisor, run as `<execPath> -e`, owns the
+// timer instead: SIGTERM at the timeout, SIGKILL after the grace period. It
+// writes how the judge actually ended to the status file, so a timeout is told
+// apart from a signal that came from somewhere else. Judge stdin/stdout/stderr
+// pass straight through. Plain CommonJS so both `node -e` and `bun -e` run it.
+//
+// The judge runs in its own process group, so every signal reaches its MCP
+// server too, and its pid goes to the pid file: if the supervisor itself is
+// killed (spawnSync's maxBuffer or backstop), runJudge kills that group, so no
+// judge outlives the run.
+const JUDGE_SUPERVISOR = `
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const [statusFile, pidFile, timeoutMs, graceMs, bin, ...args] = process.argv.slice(1);
+let timedOut = false;
+const child = spawn(bin, args, { stdio: "inherit", detached: true });
+if (child.pid) fs.writeFileSync(pidFile, String(child.pid));
+const killGroup = (sig) => { try { process.kill(-child.pid, sig); } catch {} };
+const report = (status) => { killGroup("SIGKILL"); fs.writeFileSync(statusFile, JSON.stringify(status)); process.exit(0); };
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => { killGroup("SIGKILL"); process.exit(1); });
+const timer = setTimeout(() => {
+  timedOut = true;
+  killGroup("SIGTERM");
+  setTimeout(() => killGroup("SIGKILL"), Number(graceMs)).unref();
+}, Number(timeoutMs));
+child.on("error", (err) => { clearTimeout(timer); report({ error: err.message }); });
+child.on("exit", (code, signal) => { clearTimeout(timer); report({ code, signal, timedOut }); });
+`;
+
+// Kills the judge's process group if the supervisor died before reporting.
+function killJudgeGroup(pidFile: string): void {
+  try {
+    const pid = Number(fs.readFileSync(pidFile, "utf8"));
+    if (Number.isInteger(pid) && pid > 0) process.kill(-pid, "SIGKILL");
+  } catch {
+    // No pid file (the judge never started) or the group is already gone.
+  }
+}
+
+interface SupervisorStatus {
+  error?: string;
+  code?: number | null;
+  signal?: string | null;
+  timedOut?: boolean;
+}
 
 export interface JudgeOptions {
   env?: NodeJS.ProcessEnv;
@@ -415,6 +464,8 @@ export interface JudgeOptions {
   claims?: Claim[] | null;
   pass2?: Pass2Context;
   timeoutMs?: number;
+  killGraceMs?: number;
+  maxBuffer?: number;
 }
 
 export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions = {}): JudgeResult {
@@ -467,26 +518,58 @@ export function runJudge(adrId: string, adrContent: string, opts: JudgeOptions =
     const ALLOWED_TOOLS = "mcp__pawpie__search,mcp__pawpie__fetch_url";
 
     const timeoutMs = opts.timeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS;
+    const killGraceMs = opts.killGraceMs ?? DEFAULT_JUDGE_KILL_GRACE_MS;
+    const statusFile = path.join(workDir, "judge-status.json");
+    const pidFile = path.join(workDir, "judge.pid");
     const child = spawnSync(
-      bin,
-      [...cmdArgs, "--mcp-config", mcpConfigFile, "--strict-mcp-config", "--allowedTools", ALLOWED_TOOLS],
+      process.execPath,
+      [
+        "-e",
+        JUDGE_SUPERVISOR,
+        statusFile,
+        pidFile,
+        String(timeoutMs),
+        String(killGraceMs),
+        bin,
+        ...cmdArgs,
+        "--mcp-config",
+        mcpConfigFile,
+        "--strict-mcp-config",
+        "--allowedTools",
+        ALLOWED_TOOLS,
+      ],
       {
         env,
         input: prompt,
         encoding: "utf8",
-        maxBuffer: 64 * 1024 * 1024,
-        timeout: timeoutMs,
+        maxBuffer: opts.maxBuffer ?? 64 * 1024 * 1024,
+        // Backstop only, for a wedged supervisor: SIGKILL cannot be ignored.
+        timeout: timeoutMs + killGraceMs + 30 * 1000,
+        killSignal: "SIGKILL",
       },
     );
-    if ((child.error as NodeJS.ErrnoException)?.code === "ETIMEDOUT") {
-      throw new JudgeError(`judge command exceeded its ${timeoutMs}ms timeout and was killed`);
+    if (child.error) {
+      killJudgeGroup(pidFile);
+      throw new JudgeError(`judge supervisor failed: ${child.error.message}`);
     }
-    if (child.error) throw new JudgeError(`judge command failed to start: ${child.error.message}`);
-    if (child.signal) {
-      throw new JudgeError(`judge command was killed by ${child.signal} after exceeding its ${timeoutMs}ms timeout`);
+    let status: SupervisorStatus;
+    try {
+      status = JSON.parse(fs.readFileSync(statusFile, "utf8")) as SupervisorStatus;
+    } catch {
+      killJudgeGroup(pidFile);
+      throw new JudgeError(
+        `judge supervisor ended without reporting a status (exit ${child.status ?? child.signal}): ${(child.stderr ?? "").slice(0, 500)}`,
+      );
     }
-    if (child.status !== 0) {
-      throw new JudgeError(`judge command exited ${child.status}: ${(child.stderr ?? "").slice(0, 500)}`);
+    if (status.error !== undefined) throw new JudgeError(`judge command failed to start: ${status.error}`);
+    if (status.timedOut) {
+      throw new JudgeError(
+        `judge command exceeded its ${timeoutMs}ms timeout and was killed${status.signal ? ` with ${status.signal}` : ""}`,
+      );
+    }
+    if (status.signal) throw new JudgeError(`judge command was killed by ${status.signal}`);
+    if (status.code !== 0) {
+      throw new JudgeError(`judge command exited ${status.code}: ${(child.stderr ?? "").slice(0, 500)}`);
     }
     const stdout = child.stdout ?? "";
 
