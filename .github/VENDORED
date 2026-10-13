@@ -1,0 +1,4 @@
+# Copied unmodified from princess-pi-tools; update by copying again, never by editing.
+workflows/review-gate.yml  princess-pi-tools/templates/ci/review-gate.yml@31a41c21a58352932a3887ebc9b3bfd98bd79897  d24b3aeefaaa9a9256310691857034f49a8c946a2abc3c68eac7bf620efcf4c0
+scripts/review-gate-post  princess-pi-tools/templates/ci/review-gate-post@31a41c21a58352932a3887ebc9b3bfd98bd79897  69c6ddeda91fd572ac57bedf9bf2f18201cedb7df6f2c70af5de1fdf41626a1f
+scripts/review_gate_decide.py  princess-pi-tools/templates/ci/review_gate_decide.py@31a41c21a58352932a3887ebc9b3bfd98bd79897  4376d35b81bafd086de7b4b8b4b7dda45f5f4a1569df7f742c15fade6f7c2aad
