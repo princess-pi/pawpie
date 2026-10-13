@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# review-gate-post — post the `review-gate` commit status on a PR head.
+#
+# Env: REPO (owner/repo), SHA (the head to post on), PR (the PR number; empty means
+# read the open PRs whose head is SHA once and never poll — the check_run path),
+# REVIEW_GATE_POLL_SECONDS (how long a ready PR waits for Macroscope, default 600),
+# REVIEW_GATE_POLL_INTERVAL (seconds between reads, default 20).
+# Needs gh (authenticated), jq and python3 on PATH.
+# Exits 0 after posting, or with nothing to post when no open PR has SHA as its head.
+# Exits nonzero on any failure, after trying to post `error` on SHA; on SIGINT or SIGTERM
+# (a cancelled or timed-out job) it exits 143 and posts nothing.
+set -euo pipefail
+shopt -s inherit_errexit
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+poll_seconds=${REVIEW_GATE_POLL_SECONDS:-600}
+interval=${REVIEW_GATE_POLL_INTERVAL:-20}
+pr=${PR:-}
+
+post() {
+	gh api -X POST "repos/$REPO/statuses/$SHA" \
+		-f "state=$1" -f "context=review-gate" -f "description=${2:0:140}" >/dev/null
+	echo "review-gate-post: head $SHA: $1 — $2"
+}
+
+on_exit() {
+	local rc=$?
+	if [ "$rc" -ne 0 ]; then
+		trap - EXIT
+		post error "review-gate-post failed (exit $rc); re-run the workflow" || true
+	fi
+	exit "$rc"
+}
+trap on_exit EXIT
+trap 'trap - EXIT; exit 143' INT TERM
+
+[[ $poll_seconds =~ ^[0-9]{1,6}$ ]] ||
+	{ echo "review-gate-post: REVIEW_GATE_POLL_SECONDS must be 0-999999, got '$poll_seconds'" >&2; exit 2; }
+[[ $interval =~ ^[0-9]{1,6}$ ]] ||
+	{ echo "review-gate-post: REVIEW_GATE_POLL_INTERVAL must be 0-999999, got '$interval'" >&2; exit 2; }
+poll_seconds=$((10#$poll_seconds))
+interval=$((10#$interval))
+
+poll=1
+[ -n "$pr" ] || poll=0
+[ "$poll" = 0 ] || post pending "re-evaluating: reading labels and the Macroscope check"
+
+read_pulls() {
+	local on_sha
+	on_sha=$(gh api --paginate "repos/$REPO/commits/$SHA/pulls?per_page=100" |
+		jq -s --arg sha "$SHA" '[add // [] | .[] | select(.state == "open" and .head.sha == $sha)]')
+	if [ -n "$pr" ]; then
+		jq --argjson own "$(gh api "repos/$REPO/pulls/$pr")" --arg sha "$SHA" \
+			'[$own | select(.state == "open" and .head.sha == $sha)] + [.[] | select(.number != $own.number)]' <<<"$on_sha"
+	else
+		printf '%s\n' "$on_sha"
+	fi
+}
+
+posted=""
+deadline=$((SECONDS + poll_seconds))
+while :; do
+	pulls=$(read_pulls)
+	if [ "$(jq 'length' <<<"$pulls")" = 0 ]; then
+		echo "review-gate-post: no open PR has head $SHA; nothing to post"
+		exit 0
+	fi
+	draft=$(jq 'all(.draft)' <<<"$pulls")
+	runs=$(gh api "repos/$REPO/commits/$SHA/check-runs?check_name=Macroscope%20-%20Correctness%20Check&per_page=100")
+	decision=$(jq -n --argjson pulls "$pulls" --argjson runs "$runs" \
+		'{pr_labels: [$pulls[] | [.labels[].name]], check_runs: $runs.check_runs}' |
+		python3 -I "$here/review_gate_decide.py")
+	state=$(jq -r '.state' <<<"$decision")
+	description=$(jq -r '.description' <<<"$decision")
+
+	if [ "$state" = pending ] && [ "$draft" = true ]; then
+		post pending "Draft: Macroscope reviews it once it is marked ready"
+		exit 0
+	fi
+	if [ "$state" != pending ] || [ "$poll" = 0 ]; then
+		post "$state" "$description"
+		exit 0
+	fi
+	if [ "$SECONDS" -ge "$deadline" ]; then
+		post pending "$description after ${poll_seconds}s"
+		exit 0
+	fi
+	[ -n "$posted" ] || { post pending "$description"; posted=pending; }
+	sleep "$interval"
+done

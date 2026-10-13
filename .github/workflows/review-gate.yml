@@ -1,0 +1,39 @@
+name: review-gate
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled]
+  check_run:
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  statuses: write
+
+jobs:
+  post-status:
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event.check_run.app.id == 900172 &&
+       github.event.check_run.name == 'Macroscope - Correctness Check')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: review-gate-${{ github.event_name }}-${{ github.event.pull_request.head.sha || github.event.check_run.head_sha }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Post the review-gate status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha || github.event.check_run.head_sha }}
+          PR: ${{ github.event.pull_request.number }}
+          REVIEW_GATE_POLL_SECONDS: '600'
+          REVIEW_GATE_POLL_INTERVAL: '20'
+        run: .github/scripts/review-gate-post
