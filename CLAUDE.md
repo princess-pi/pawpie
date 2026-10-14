@@ -9,13 +9,6 @@ The only outside *project* links it carries are
 [quoteinvestigator.com](https://quoteinvestigator.com/2017/11/18/planning/) (the quote source) —
 this does not count Duppy's own GitHub profile or this repo's own issue tracker.
 
-## Workflow
-
-Load the `workflow` skill (also `~/.config/princess-pi/workflow.md`) at the start of any session
-that will branch, commit, open a PR, or clean up after one — it carries the hard gates, branch and
-worktree layout, the shipped scripts, TDD-to-merge flow, issue cadence, and git guardrails. Follow
-it, not a restated copy here.
-
 Tracking issue: [princess-pi/pawpie#3](https://github.com/princess-pi/pawpie/issues/3) — comment
 there about as often as you commit.
 
